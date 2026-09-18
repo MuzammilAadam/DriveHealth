@@ -6,12 +6,15 @@ import com.example.drivehealth.dto.DriveFilesPageResponse;
 import com.example.drivehealth.dto.ScanSummaryResponse;
 import com.example.drivehealth.dto.google.GoogleDriveFileItem;
 import com.example.drivehealth.dto.google.GoogleDriveFileListResponse;
+import com.example.drivehealth.dto.google.GoogleDrivePermission;
 import com.example.drivehealth.entity.DriveFile;
 import com.example.drivehealth.entity.GoogleAccount;
+import com.example.drivehealth.entity.Permission;
 import com.example.drivehealth.exception.OAuthException;
 import com.example.drivehealth.exception.ResourceNotFoundException;
 import com.example.drivehealth.repository.DriveFileRepository;
 import com.example.drivehealth.repository.GoogleAccountRepository;
+import com.example.drivehealth.repository.PermissionRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpEntity;
@@ -45,22 +48,25 @@ public class GoogleDriveService {
 
     private static final String DRIVE_FILES_API_URL = "https://www.googleapis.com/drive/v3/files";
 
-    // Request only the metadata fields required by Drive Health
-    private static final String FIELDS_QUERY = "nextPageToken, files(id, name, mimeType, size, createdTime, modifiedTime, parents, webViewLink, md5Checksum, trashed, owners)";
+    // Request file metadata fields + permissions in one call per page (no per-file extra requests)
+    private static final String FIELDS_QUERY = "nextPageToken, files(id, name, mimeType, size, createdTime, modifiedTime, parents, webViewLink, md5Checksum, trashed, owners, permissions)";
 
     private final GoogleAccountRepository googleAccountRepository;
     private final DriveFileRepository driveFileRepository;
     private final GoogleOAuthService googleOAuthService;
     private final RestTemplate restTemplate;
+    private final PermissionRepository permissionRepository;
 
     public GoogleDriveService(GoogleAccountRepository googleAccountRepository,
                               DriveFileRepository driveFileRepository,
                               GoogleOAuthService googleOAuthService,
-                              RestTemplate restTemplate) {
+                              RestTemplate restTemplate,
+                              PermissionRepository permissionRepository) {
         this.googleAccountRepository = googleAccountRepository;
         this.driveFileRepository = driveFileRepository;
         this.googleOAuthService = googleOAuthService;
         this.restTemplate = restTemplate;
+        this.permissionRepository = permissionRepository;
     }
 
     /**
@@ -119,48 +125,78 @@ public class GoogleDriveService {
     }
 
     /**
-     * Retrieves ALL files from Google Drive by continuously following 'nextPageToken'
-     * until Google indicates no more pages are available.
-     * Uses a simple while-loop for easy understanding and debugging.
+     * Retrieves ALL files from Google Drive by continuously following 'nextPageToken'.
+     * Returns raw GoogleDriveFileItem objects (which include permissions).
      */
-    public List<DriveFileDto> fetchAllFiles(Long googleAccountId) {
-        List<DriveFileDto> allFiles = new ArrayList<>();
+    public List<GoogleDriveFileItem> fetchAllFileItems(Long googleAccountId) {
+        GoogleAccount account = getAccount(googleAccountId);
+        String accessToken = googleOAuthService.getValidAccessToken(account);
+
+        List<GoogleDriveFileItem> allItems = new ArrayList<>();
         String pageToken = null;
 
         log.info("Starting full metadata retrieval for Google Account ID: {}", googleAccountId);
 
         do {
-            DriveFilesPageResponse page = getFilesPage(googleAccountId, 100, pageToken);
-            if (page.getFiles() != null && !page.getFiles().isEmpty()) {
-                allFiles.addAll(page.getFiles());
+            UriComponentsBuilder uriBuilder = UriComponentsBuilder.fromHttpUrl(DRIVE_FILES_API_URL)
+                    .queryParam("pageSize", 100)
+                    .queryParam("fields", FIELDS_QUERY)
+                    .queryParam("supportsAllDrives", true)
+                    .queryParam("includeItemsFromAllDrives", true);
+            if (pageToken != null && !pageToken.trim().isEmpty()) {
+                uriBuilder.queryParam("pageToken", pageToken);
             }
-            pageToken = page.getNextPageToken();
+            HttpHeaders headers = new HttpHeaders();
+            headers.setBearerAuth(accessToken);
+            HttpEntity<Void> request = new HttpEntity<>(headers);
+
+            ResponseEntity<GoogleDriveFileListResponse> response = restTemplate.exchange(
+                    uriBuilder.toUriString(), HttpMethod.GET, request, GoogleDriveFileListResponse.class);
+
+            GoogleDriveFileListResponse body = response.getBody();
+            if (body != null && body.getFiles() != null) {
+                allItems.addAll(body.getFiles());
+            }
+            pageToken = (body != null) ? body.getNextPageToken() : null;
         } while (pageToken != null && !pageToken.trim().isEmpty());
 
-        log.info("Finished metadata retrieval for Google Account ID: {}. Total files found: {}", googleAccountId, allFiles.size());
-        return allFiles;
+        log.info("Finished metadata retrieval for Google Account ID: {}. Total items: {}", googleAccountId, allItems.size());
+        return allItems;
     }
 
     /**
-     * Stage 4: Scan and sync metadata into local MySQL database.
-     * 
+     * Retrieves ALL files from Google Drive (as DTOs — for backward compat).
+     */
+    public List<DriveFileDto> fetchAllFiles(Long googleAccountId) {
+        List<GoogleDriveFileItem> items = fetchAllFileItems(googleAccountId);
+        List<DriveFileDto> dtos = new ArrayList<>();
+        for (GoogleDriveFileItem item : items) {
+            dtos.add(mapToDriveFileDto(item));
+        }
+        return dtos;
+    }
+
+    /**
+     * Stage 4 + 9: Scan and sync metadata into local MySQL database, including permissions.
+     *
      * Flow:
-     * 1. Fetches all file metadata from Google Drive API.
-     * 2. Pre-loads existing local DriveFile records into memory to prevent duplicates.
-     * 3. Updates existing files or creates new records using googleFileId.
-     * 4. Updates GoogleAccount's lastSyncedAt timestamp.
-     * 5. Returns a ScanSummaryResponse.
+     * 1. Fetches all file metadata (+ permissions) from Google Drive API in batches.
+     * 2. Pre-loads existing local DriveFile records into memory.
+     * 3. Upserts DriveFile records using googleFileId.
+     * 4. Syncs Permission records for all files.
+     * 5. Updates GoogleAccount's lastSyncedAt.
+     * 6. Returns a ScanSummaryResponse.
      */
     @Transactional
     public ScanSummaryResponse scanAndSyncFiles(Long googleAccountId) {
         GoogleAccount account = getAccount(googleAccountId);
         log.info("Starting scan and sync for Google Account: {}", account.getEmail());
 
-        // Step 1: Fetch remote files from Google Drive API
-        List<DriveFileDto> remoteFiles = fetchAllFiles(account.getId());
-        int filesScanned = remoteFiles.size();
+        // Step 1: Fetch raw items (includes permissions)
+        List<GoogleDriveFileItem> rawItems = fetchAllFileItems(account.getId());
+        int filesScanned = rawItems.size();
 
-        // Step 2: Load existing local records into a Map for fast O(1) matching by googleFileId
+        // Step 2: Load existing local records into a Map for fast O(1) matching
         List<DriveFile> existingFiles = driveFileRepository.findByGoogleAccount_Id(account.getId());
         Map<String, DriveFile> existingFileMap = new HashMap<>();
         for (DriveFile file : existingFiles) {
@@ -173,11 +209,11 @@ public class GoogleDriveService {
         List<DriveFile> recordsToSave = new ArrayList<>();
 
         // Step 3: Process every scanned file
-        for (DriveFileDto dto : remoteFiles) {
+        for (GoogleDriveFileItem item : rawItems) {
+            DriveFileDto dto = mapToDriveFileDto(item);
             DriveFile existingFile = existingFileMap.get(dto.getId());
 
             if (existingFile != null) {
-                // Update existing record with latest metadata
                 existingFile.setName(dto.getName());
                 existingFile.setMimeType(dto.getMimeType());
                 existingFile.setSize(dto.getSize() != null ? dto.getSize() : 0L);
@@ -189,11 +225,9 @@ public class GoogleDriveService {
                 existingFile.setTrashed(dto.getTrashed() != null ? dto.getTrashed() : false);
                 existingFile.setOwnerEmail(dto.getOwnerEmail());
                 existingFile.setIndexedAt(now);
-
                 recordsToSave.add(existingFile);
                 updatedFiles++;
             } else {
-                // Create a new record for previously unseen file
                 DriveFile newFile = new DriveFile();
                 newFile.setGoogleAccount(account);
                 newFile.setGoogleFileId(dto.getId());
@@ -208,18 +242,25 @@ public class GoogleDriveService {
                 newFile.setTrashed(dto.getTrashed() != null ? dto.getTrashed() : false);
                 newFile.setOwnerEmail(dto.getOwnerEmail());
                 newFile.setIndexedAt(now);
-
                 recordsToSave.add(newFile);
                 newFiles++;
             }
         }
 
-        // Step 4: Batch save to database
+        // Step 4: Batch save files
         if (!recordsToSave.isEmpty()) {
             driveFileRepository.saveAll(recordsToSave);
         }
 
-        // Step 5: Update account's lastSyncedAt
+        // Step 5: Sync permissions using raw items (they already carry permission data)
+        List<DriveFile> allSavedFiles = driveFileRepository.findByGoogleAccount_Id(account.getId());
+        Map<String, DriveFile> savedFileMap = new HashMap<>();
+        for (DriveFile f : allSavedFiles) {
+            savedFileMap.put(f.getGoogleFileId(), f);
+        }
+        syncPermissionsFromItems(account, rawItems, savedFileMap);
+
+        // Step 6: Update account's lastSyncedAt
         account.setLastSyncedAt(now);
         googleAccountRepository.save(account);
 
@@ -241,6 +282,53 @@ public class GoogleDriveService {
             responses.add(mapToDriveFileResponse(file));
         }
         return responses;
+    }
+
+
+
+    /**
+     * Syncs permissions from raw Google Drive API items for a given account.
+     * Called after a scan completes. Clears existing permissions for the account and re-inserts.
+     */
+    public void syncPermissionsFromItems(GoogleAccount account,
+                                         List<GoogleDriveFileItem> items,
+                                         Map<String, DriveFile> savedFileMap) {
+        // Clear all existing permissions for this account before re-syncing
+        permissionRepository.deleteByGoogleAccountId(account.getId());
+
+        List<Permission> permissionsToSave = new ArrayList<>();
+
+        for (GoogleDriveFileItem item : items) {
+            if (item.getPermissions() == null || item.getPermissions().isEmpty()) {
+                continue;
+            }
+            DriveFile driveFile = savedFileMap.get(item.getId());
+            if (driveFile == null) {
+                continue;
+            }
+            for (GoogleDrivePermission gPerm : item.getPermissions()) {
+                if (gPerm.getId() == null || gPerm.getType() == null || gPerm.getRole() == null) {
+                    continue;
+                }
+                Permission perm = new Permission();
+                perm.setGoogleAccount(account);
+                perm.setDriveFile(driveFile);
+                perm.setPermissionId(gPerm.getId());
+                perm.setType(gPerm.getType());
+                perm.setRole(gPerm.getRole());
+                perm.setEmailAddress(gPerm.getEmailAddress());
+                perm.setDisplayName(gPerm.getDisplayName());
+                perm.setDomain(gPerm.getDomain());
+                perm.setAllowFileDiscovery(gPerm.getAllowFileDiscovery());
+                perm.setExpirationTime(parseIsoDateTime(gPerm.getExpirationTime()));
+                permissionsToSave.add(perm);
+            }
+        }
+
+        if (!permissionsToSave.isEmpty()) {
+            permissionRepository.saveAll(permissionsToSave);
+            log.info("Synced {} permission records for account {}", permissionsToSave.size(), account.getEmail());
+        }
     }
 
     /**

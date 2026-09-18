@@ -41,6 +41,10 @@ public class GoogleDriveFileItem {
     @JsonProperty("owners")
     private List<GoogleDriveOwner> owners;
 
+    // Stage 9: permissions field — populated when 'permissions' is included in the fields mask
+    @JsonProperty("permissions")
+    private List<GoogleDrivePermission> permissions;
+
     public GoogleDriveFileItem() {
     }
 
@@ -130,6 +134,14 @@ public class GoogleDriveFileItem {
 
     public void setOwners(List<GoogleDriveOwner> owners) {
         this.owners = owners;
+    }
+
+    public List<GoogleDrivePermission> getPermissions() {
+        return permissions;
+    }
+
+    public void setPermissions(List<GoogleDrivePermission> permissions) {
+        this.permissions = permissions;
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
