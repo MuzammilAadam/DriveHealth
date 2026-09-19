@@ -46,11 +46,21 @@ public class AuthController {
     }
 
     /**
-     * Retrieves user profile details and connected Google accounts.
+     * Retrieves user profile details and connected Google accounts for a specific user ID.
      */
     @GetMapping("/users/{userId}")
     public ResponseEntity<UserResponse> getUserProfile(@PathVariable("userId") Long userId) {
         UserResponse user = googleOAuthService.getUserProfile(userId);
+        return ResponseEntity.ok(user);
+    }
+
+    /**
+     * Retrieves the current authenticated user's profile and connected Google accounts.
+     * GET /api/auth/me
+     */
+    @GetMapping("/me")
+    public ResponseEntity<UserResponse> getMe() {
+        UserResponse user = googleOAuthService.getCurrentUserProfile();
         return ResponseEntity.ok(user);
     }
 }

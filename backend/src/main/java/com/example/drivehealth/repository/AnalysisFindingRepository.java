@@ -28,6 +28,10 @@ public interface AnalysisFindingRepository extends JpaRepository<AnalysisFinding
 
     long countByGoogleAccount_IdAndStatus(Long googleAccountId, FindingStatus status);
 
+    long countByGoogleAccount_IdAndStatusAndSeverity(Long googleAccountId, FindingStatus status, Severity severity);
+
+    long countByGoogleAccount_IdAndFindingType(Long googleAccountId, FindingType findingType);
+
     /**
      * Eagerly loads findings and their associated DriveFile in a single query
      * to prevent N+1 query overhead.

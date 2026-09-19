@@ -42,13 +42,16 @@ public class OldFileAnalysisService {
     private final GoogleAccountRepository googleAccountRepository;
     private final DriveFileRepository driveFileRepository;
     private final AnalysisFindingRepository analysisFindingRepository;
+    private final UserRuleService userRuleService;
 
     public OldFileAnalysisService(GoogleAccountRepository googleAccountRepository,
                                   DriveFileRepository driveFileRepository,
-                                  AnalysisFindingRepository analysisFindingRepository) {
+                                  AnalysisFindingRepository analysisFindingRepository,
+                                  @org.springframework.beans.factory.annotation.Autowired(required = false) UserRuleService userRuleService) {
         this.googleAccountRepository = googleAccountRepository;
         this.driveFileRepository = driveFileRepository;
         this.analysisFindingRepository = analysisFindingRepository;
+        this.userRuleService = userRuleService;
     }
 
     /**
@@ -61,7 +64,8 @@ public class OldFileAnalysisService {
     @Transactional
     public OldFilesAnalysisResponse analyzeOldFiles(Long googleAccountId, Integer years) {
         GoogleAccount account = resolveAccount(googleAccountId);
-        int thresholdYears = (years != null && years > 0) ? years : defaultYearsThreshold;
+        int thresholdYears = (years != null && years > 0) ? years :
+                (userRuleService != null ? userRuleService.getEffectiveOldFileYears(account.getId(), defaultYearsThreshold) : defaultYearsThreshold);
         LocalDateTime cutoffDate = LocalDateTime.now().minusYears(thresholdYears);
 
         log.info("Starting old file analysis for {} with threshold: {} years (cutoff: {})",
@@ -79,6 +83,12 @@ public class OldFileAnalysisService {
 
         // Step 3: Scan each file using straightforward loop logic
         for (DriveFile file : files) {
+            // Respect user rules (skip ignored folders or MIME types)
+            if (userRuleService != null && (userRuleService.isFolderIgnored(account.getId(), file.getParentId())
+                    || userRuleService.isMimeTypeIgnored(account.getId(), file.getMimeType()))) {
+                continue;
+            }
+
             LocalDateTime lastModified = file.getModifiedTime();
             if (lastModified == null) {
                 lastModified = file.getCreatedTime();
@@ -95,7 +105,7 @@ public class OldFileAnalysisService {
                 long yearsOld = daysSinceModified / 365;
 
                 // Human-readable explanation based on actual facts
-                String reason = "Not modified for more than " + thresholdYears + " years";
+                String reason = "Not modified for " + daysSinceModified + " days (exceeds " + thresholdYears + " year threshold)";
 
                 // Older files have higher severity (>= 5 years: HIGH, otherwise MEDIUM)
                 Severity severity = (yearsOld >= 5) ? Severity.HIGH : Severity.MEDIUM;

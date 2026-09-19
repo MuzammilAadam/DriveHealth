@@ -48,15 +48,18 @@ public class DuplicateDetectionService {
     private final DriveFileRepository driveFileRepository;
     private final DuplicateGroupRepository duplicateGroupRepository;
     private final AnalysisFindingRepository analysisFindingRepository;
+    private final UserRuleService userRuleService;
 
     public DuplicateDetectionService(GoogleAccountRepository googleAccountRepository,
                                      DriveFileRepository driveFileRepository,
                                      DuplicateGroupRepository duplicateGroupRepository,
-                                     AnalysisFindingRepository analysisFindingRepository) {
+                                     AnalysisFindingRepository analysisFindingRepository,
+                                     @org.springframework.beans.factory.annotation.Autowired(required = false) UserRuleService userRuleService) {
         this.googleAccountRepository = googleAccountRepository;
         this.driveFileRepository = driveFileRepository;
         this.duplicateGroupRepository = duplicateGroupRepository;
         this.analysisFindingRepository = analysisFindingRepository;
+        this.userRuleService = userRuleService;
     }
 
     /**
@@ -74,6 +77,12 @@ public class DuplicateDetectionService {
         // Step 2: Group files by MD5 checksum using a straightforward Map
         Map<String, List<DriveFile>> checksumMap = new HashMap<>();
         for (DriveFile file : files) {
+            // Respect user rules (skip ignored folders or MIME types)
+            if (userRuleService != null && (userRuleService.isFolderIgnored(account.getId(), file.getParentId())
+                    || userRuleService.isMimeTypeIgnored(account.getId(), file.getMimeType()))) {
+                continue;
+            }
+
             String checksum = file.getMd5Checksum();
 
             // Skip files without a valid checksum (e.g. native Google Docs, empty files, or folders)

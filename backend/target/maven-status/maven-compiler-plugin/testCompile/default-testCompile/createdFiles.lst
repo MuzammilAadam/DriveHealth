@@ -1,5 +1,9 @@
 com\example\drivehealth\DriveHealthApplicationTests.class
+com\example\drivehealth\service\StorageSnapshotServiceTest.class
+com\example\drivehealth\service\OldFileAnalysisServiceTest.class
 com\example\drivehealth\service\AnalysisFindingServiceTest.class
+com\example\drivehealth\service\ScanRunServiceTest.class
+com\example\drivehealth\service\UserRuleServiceTest.class
+com\example\drivehealth\service\DashboardServiceTest.class
 com\example\drivehealth\service\DuplicateDetectionServiceTest.class
 com\example\drivehealth\service\GoogleDriveServiceTest.class
-com\example\drivehealth\service\OldFileAnalysisServiceTest.class

@@ -46,13 +46,16 @@ public class LargeFileAnalysisService {
     private final GoogleAccountRepository googleAccountRepository;
     private final DriveFileRepository driveFileRepository;
     private final AnalysisFindingRepository analysisFindingRepository;
+    private final UserRuleService userRuleService;
 
     public LargeFileAnalysisService(GoogleAccountRepository googleAccountRepository,
                                      DriveFileRepository driveFileRepository,
-                                     AnalysisFindingRepository analysisFindingRepository) {
+                                     AnalysisFindingRepository analysisFindingRepository,
+                                     @org.springframework.beans.factory.annotation.Autowired(required = false) UserRuleService userRuleService) {
         this.googleAccountRepository = googleAccountRepository;
         this.driveFileRepository = driveFileRepository;
         this.analysisFindingRepository = analysisFindingRepository;
+        this.userRuleService = userRuleService;
     }
 
     /**
@@ -64,7 +67,8 @@ public class LargeFileAnalysisService {
     @Transactional
     public LargeFileAnalysisResponse analyzeLargeFiles(Long googleAccountId, Long thresholdBytes) {
         GoogleAccount account = resolveAccount(googleAccountId);
-        long threshold = (thresholdBytes != null && thresholdBytes > 0) ? thresholdBytes : defaultThresholdBytes;
+        long threshold = (thresholdBytes != null && thresholdBytes > 0) ? thresholdBytes :
+                (userRuleService != null ? userRuleService.getEffectiveLargeFileThreshold(account.getId(), defaultThresholdBytes) : defaultThresholdBytes);
         double thresholdMb = threshold / (1024.0 * 1024.0);
 
         log.info("Starting large file analysis for {} with threshold: {} bytes ({} MB)",
@@ -82,6 +86,12 @@ public class LargeFileAnalysisService {
 
         // Step 3: Scan each file
         for (DriveFile file : files) {
+            // Respect user rules (skip ignored folders or MIME types)
+            if (userRuleService != null && (userRuleService.isFolderIgnored(account.getId(), file.getParentId())
+                    || userRuleService.isMimeTypeIgnored(account.getId(), file.getMimeType()))) {
+                continue;
+            }
+
             Long size = file.getSize();
             if (size == null || size <= threshold) {
                 continue;

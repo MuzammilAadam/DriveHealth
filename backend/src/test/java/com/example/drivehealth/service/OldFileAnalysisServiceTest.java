@@ -121,7 +121,9 @@ class OldFileAnalysisServiceTest {
         // Check finding details
         AnalysisFinding f1 = savedFindings.stream().filter(f -> f.getDriveFile().getId().equals(201L)).findFirst().orElseThrow();
         assertEquals(Severity.MEDIUM, f1.getSeverity());
-        assertEquals("Not modified for more than 2 years", f1.getReason());
+        // Reason format: "Not modified for <N> days (exceeds <years> year threshold)"
+        assertTrue(f1.getReason().startsWith("Not modified for "), "Reason should describe days since modification");
+        assertTrue(f1.getReason().contains("2 year threshold"), "Reason should mention the configured threshold");
 
         AnalysisFinding f2 = savedFindings.stream().filter(f -> f.getDriveFile().getId().equals(203L)).findFirst().orElseThrow();
         assertEquals(Severity.HIGH, f2.getSeverity(), "Files older than 5 years should have HIGH severity");

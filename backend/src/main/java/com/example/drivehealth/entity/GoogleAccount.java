@@ -73,6 +73,10 @@ public class GoogleAccount {
     @Column(name = "last_synced_at")
     private LocalDateTime lastSyncedAt;
 
+    // Stage 17: Latest Google Drive change token for incremental sync
+    @Column(name = "change_token", length = 255)
+    private String changeToken;
+
     public GoogleAccount() {
     }
 
@@ -185,5 +189,13 @@ public class GoogleAccount {
 
     public void setLastSyncedAt(LocalDateTime lastSyncedAt) {
         this.lastSyncedAt = lastSyncedAt;
+    }
+
+    public String getChangeToken() {
+        return changeToken;
+    }
+
+    public void setChangeToken(String changeToken) {
+        this.changeToken = changeToken;
     }
 }

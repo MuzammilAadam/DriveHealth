@@ -56,17 +56,23 @@ public class GoogleDriveService {
     private final GoogleOAuthService googleOAuthService;
     private final RestTemplate restTemplate;
     private final PermissionRepository permissionRepository;
+    private final ScanRunService scanRunService;
+    private final StorageSnapshotService storageSnapshotService;
 
     public GoogleDriveService(GoogleAccountRepository googleAccountRepository,
                               DriveFileRepository driveFileRepository,
                               GoogleOAuthService googleOAuthService,
                               RestTemplate restTemplate,
-                              PermissionRepository permissionRepository) {
+                              PermissionRepository permissionRepository,
+                              ScanRunService scanRunService,
+                              StorageSnapshotService storageSnapshotService) {
         this.googleAccountRepository = googleAccountRepository;
         this.driveFileRepository = driveFileRepository;
         this.googleOAuthService = googleOAuthService;
         this.restTemplate = restTemplate;
         this.permissionRepository = permissionRepository;
+        this.scanRunService = scanRunService;
+        this.storageSnapshotService = storageSnapshotService;
     }
 
     /**
@@ -192,82 +198,278 @@ public class GoogleDriveService {
         GoogleAccount account = getAccount(googleAccountId);
         log.info("Starting scan and sync for Google Account: {}", account.getEmail());
 
-        // Step 1: Fetch raw items (includes permissions)
-        List<GoogleDriveFileItem> rawItems = fetchAllFileItems(account.getId());
-        int filesScanned = rawItems.size();
+        com.example.drivehealth.entity.ScanRun scanRun = scanRunService.startScanRun(account, "FULL");
 
-        // Step 2: Load existing local records into a Map for fast O(1) matching
-        List<DriveFile> existingFiles = driveFileRepository.findByGoogleAccount_Id(account.getId());
-        Map<String, DriveFile> existingFileMap = new HashMap<>();
-        for (DriveFile file : existingFiles) {
-            existingFileMap.put(file.getGoogleFileId(), file);
+        try {
+            // Step 1: Fetch raw items (includes permissions)
+            List<GoogleDriveFileItem> rawItems = fetchAllFileItems(account.getId());
+            int filesScanned = rawItems.size();
+
+            // Step 2: Load existing local records into a Map for fast O(1) matching
+            List<DriveFile> existingFiles = driveFileRepository.findByGoogleAccount_Id(account.getId());
+            Map<String, DriveFile> existingFileMap = new HashMap<>();
+            for (DriveFile file : existingFiles) {
+                existingFileMap.put(file.getGoogleFileId(), file);
+            }
+
+            int newFiles = 0;
+            int updatedFiles = 0;
+            LocalDateTime now = LocalDateTime.now();
+            List<DriveFile> recordsToSave = new ArrayList<>();
+
+            // Step 3: Process every scanned file
+            for (GoogleDriveFileItem item : rawItems) {
+                DriveFileDto dto = mapToDriveFileDto(item);
+                DriveFile existingFile = existingFileMap.get(dto.getId());
+
+                if (existingFile != null) {
+                    existingFile.setName(dto.getName());
+                    existingFile.setMimeType(dto.getMimeType());
+                    existingFile.setSize(dto.getSize() != null ? dto.getSize() : 0L);
+                    existingFile.setCreatedTime(dto.getCreatedTime());
+                    existingFile.setModifiedTime(dto.getModifiedTime());
+                    existingFile.setParentId(dto.getParentId());
+                    existingFile.setWebUrl(dto.getWebUrl());
+                    existingFile.setMd5Checksum(dto.getMd5Checksum());
+                    existingFile.setTrashed(dto.getTrashed() != null ? dto.getTrashed() : false);
+                    existingFile.setOwnerEmail(dto.getOwnerEmail());
+                    existingFile.setIndexedAt(now);
+                    recordsToSave.add(existingFile);
+                    updatedFiles++;
+                } else {
+                    DriveFile newFile = new DriveFile();
+                    newFile.setGoogleAccount(account);
+                    newFile.setGoogleFileId(dto.getId());
+                    newFile.setName(dto.getName());
+                    newFile.setMimeType(dto.getMimeType());
+                    newFile.setSize(dto.getSize() != null ? dto.getSize() : 0L);
+                    newFile.setCreatedTime(dto.getCreatedTime());
+                    newFile.setModifiedTime(dto.getModifiedTime());
+                    newFile.setParentId(dto.getParentId());
+                    newFile.setWebUrl(dto.getWebUrl());
+                    newFile.setMd5Checksum(dto.getMd5Checksum());
+                    newFile.setTrashed(dto.getTrashed() != null ? dto.getTrashed() : false);
+                    newFile.setOwnerEmail(dto.getOwnerEmail());
+                    newFile.setIndexedAt(now);
+                    recordsToSave.add(newFile);
+                    newFiles++;
+                }
+            }
+
+            // Step 4: Batch save files
+            if (!recordsToSave.isEmpty()) {
+                driveFileRepository.saveAll(recordsToSave);
+            }
+
+            // Step 5: Sync permissions using raw items (they already carry permission data)
+            List<DriveFile> allSavedFiles = driveFileRepository.findByGoogleAccount_Id(account.getId());
+            Map<String, DriveFile> savedFileMap = new HashMap<>();
+            for (DriveFile f : allSavedFiles) {
+                savedFileMap.put(f.getGoogleFileId(), f);
+            }
+            syncPermissionsFromItems(account, rawItems, savedFileMap);
+
+            // Step 6: Initialize start page token for future incremental change tracking
+            String startPageToken = fetchStartPageToken(account);
+            if (startPageToken != null) {
+                account.setChangeToken(startPageToken);
+            }
+
+            // Step 7: Update account's lastSyncedAt
+            account.setLastSyncedAt(now);
+            googleAccountRepository.save(account);
+
+            // Step 8: Record storage snapshot
+            storageSnapshotService.recordSnapshot(account);
+
+            // Step 9: Complete scan run
+            scanRunService.completeScanRun(scanRun, filesScanned, newFiles, updatedFiles, 0);
+
+            log.info("Scan completed for {}: scanned={}, new={}, updated={}",
+                    account.getEmail(), filesScanned, newFiles, updatedFiles);
+
+            return new ScanSummaryResponse(filesScanned, newFiles, updatedFiles);
+        } catch (Exception ex) {
+            scanRunService.failScanRun(scanRun, ex.getMessage());
+            log.error("Scan failed for account {}: {}", account.getEmail(), ex.getMessage(), ex);
+            throw ex;
+        }
+    }
+
+    /**
+     * Stage 17: Performs incremental change synchronization using Google Drive Changes API.
+     * If no change token exists yet or token is expired, gracefully performs a full scan.
+     */
+    @Transactional
+    public ScanSummaryResponse syncChanges(Long googleAccountId) {
+        GoogleAccount account = getAccount(googleAccountId);
+
+        if (account.getChangeToken() == null || account.getChangeToken().trim().isEmpty()) {
+            log.info("No change token found for account {}. Performing initial full scan.", account.getEmail());
+            return scanAndSyncFiles(googleAccountId);
         }
 
+        log.info("Starting incremental change sync for Google Account: {}", account.getEmail());
+        com.example.drivehealth.entity.ScanRun scanRun = scanRunService.startScanRun(account, "INCREMENTAL");
+
+        String pageToken = account.getChangeToken();
+        String newStartPageToken = null;
+        int changesProcessed = 0;
         int newFiles = 0;
         int updatedFiles = 0;
         LocalDateTime now = LocalDateTime.now();
-        List<DriveFile> recordsToSave = new ArrayList<>();
 
-        // Step 3: Process every scanned file
-        for (GoogleDriveFileItem item : rawItems) {
-            DriveFileDto dto = mapToDriveFileDto(item);
-            DriveFile existingFile = existingFileMap.get(dto.getId());
+        try {
+            String accessToken = googleOAuthService.getValidAccessToken(account);
 
-            if (existingFile != null) {
-                existingFile.setName(dto.getName());
-                existingFile.setMimeType(dto.getMimeType());
-                existingFile.setSize(dto.getSize() != null ? dto.getSize() : 0L);
-                existingFile.setCreatedTime(dto.getCreatedTime());
-                existingFile.setModifiedTime(dto.getModifiedTime());
-                existingFile.setParentId(dto.getParentId());
-                existingFile.setWebUrl(dto.getWebUrl());
-                existingFile.setMd5Checksum(dto.getMd5Checksum());
-                existingFile.setTrashed(dto.getTrashed() != null ? dto.getTrashed() : false);
-                existingFile.setOwnerEmail(dto.getOwnerEmail());
-                existingFile.setIndexedAt(now);
-                recordsToSave.add(existingFile);
-                updatedFiles++;
-            } else {
-                DriveFile newFile = new DriveFile();
-                newFile.setGoogleAccount(account);
-                newFile.setGoogleFileId(dto.getId());
-                newFile.setName(dto.getName());
-                newFile.setMimeType(dto.getMimeType());
-                newFile.setSize(dto.getSize() != null ? dto.getSize() : 0L);
-                newFile.setCreatedTime(dto.getCreatedTime());
-                newFile.setModifiedTime(dto.getModifiedTime());
-                newFile.setParentId(dto.getParentId());
-                newFile.setWebUrl(dto.getWebUrl());
-                newFile.setMd5Checksum(dto.getMd5Checksum());
-                newFile.setTrashed(dto.getTrashed() != null ? dto.getTrashed() : false);
-                newFile.setOwnerEmail(dto.getOwnerEmail());
-                newFile.setIndexedAt(now);
-                recordsToSave.add(newFile);
-                newFiles++;
+            do {
+                UriComponentsBuilder uriBuilder = UriComponentsBuilder.fromHttpUrl("https://www.googleapis.com/drive/v3/changes")
+                        .queryParam("pageToken", pageToken)
+                        .queryParam("fields", "nextPageToken, newStartPageToken, changes(fileId, removed, file(id, name, mimeType, size, createdTime, modifiedTime, parents, webViewLink, md5Checksum, trashed, owners, permissions))")
+                        .queryParam("supportsAllDrives", true)
+                        .queryParam("includeItemsFromAllDrives", true);
+
+                HttpHeaders headers = new HttpHeaders();
+                headers.setBearerAuth(accessToken);
+                HttpEntity<Void> request = new HttpEntity<>(headers);
+
+                ResponseEntity<com.example.drivehealth.dto.google.GoogleDriveChangeListResponse> response = restTemplate.exchange(
+                        uriBuilder.toUriString(), HttpMethod.GET, request,
+                        com.example.drivehealth.dto.google.GoogleDriveChangeListResponse.class
+                );
+
+                com.example.drivehealth.dto.google.GoogleDriveChangeListResponse body = response.getBody();
+                if (body == null || body.getChanges() == null) {
+                    break;
+                }
+
+                for (com.example.drivehealth.dto.google.GoogleDriveChangeItem change : body.getChanges()) {
+                    changesProcessed++;
+                    String fileId = change.getFileId();
+
+                    if (Boolean.TRUE.equals(change.getRemoved())) {
+                        // File was permanently deleted
+                        driveFileRepository.deleteByGoogleAccount_IdAndGoogleFileId(account.getId(), fileId);
+                        updatedFiles++;
+                    } else if (change.getFile() != null) {
+                        GoogleDriveFileItem gFile = change.getFile();
+                        DriveFile existing = driveFileRepository.findByGoogleAccount_IdAndGoogleFileId(account.getId(), fileId).orElse(null);
+
+                        DriveFileDto dto = mapToDriveFileDto(gFile);
+                        if (existing != null) {
+                            existing.setName(dto.getName());
+                            existing.setMimeType(dto.getMimeType());
+                            existing.setSize(dto.getSize() != null ? dto.getSize() : 0L);
+                            existing.setCreatedTime(dto.getCreatedTime());
+                            existing.setModifiedTime(dto.getModifiedTime());
+                            existing.setParentId(dto.getParentId());
+                            existing.setWebUrl(dto.getWebUrl());
+                            existing.setMd5Checksum(dto.getMd5Checksum());
+                            existing.setTrashed(dto.getTrashed() != null ? dto.getTrashed() : false);
+                            existing.setOwnerEmail(dto.getOwnerEmail());
+                            existing.setIndexedAt(now);
+                            driveFileRepository.save(existing);
+                            syncPermissionsForSingleFile(account, existing, gFile.getPermissions());
+                            updatedFiles++;
+                        } else {
+                            DriveFile newFile = new DriveFile();
+                            newFile.setGoogleAccount(account);
+                            newFile.setGoogleFileId(dto.getId());
+                            newFile.setName(dto.getName());
+                            newFile.setMimeType(dto.getMimeType());
+                            newFile.setSize(dto.getSize() != null ? dto.getSize() : 0L);
+                            newFile.setCreatedTime(dto.getCreatedTime());
+                            newFile.setModifiedTime(dto.getModifiedTime());
+                            newFile.setParentId(dto.getParentId());
+                            newFile.setWebUrl(dto.getWebUrl());
+                            newFile.setMd5Checksum(dto.getMd5Checksum());
+                            newFile.setTrashed(dto.getTrashed() != null ? dto.getTrashed() : false);
+                            newFile.setOwnerEmail(dto.getOwnerEmail());
+                            newFile.setIndexedAt(now);
+                            DriveFile saved = driveFileRepository.save(newFile);
+                            syncPermissionsForSingleFile(account, saved, gFile.getPermissions());
+                            newFiles++;
+                        }
+                    }
+                }
+
+                newStartPageToken = body.getNewStartPageToken();
+                pageToken = body.getNextPageToken();
+            } while (pageToken != null && !pageToken.trim().isEmpty());
+
+            if (newStartPageToken != null) {
+                account.setChangeToken(newStartPageToken);
             }
+            account.setLastSyncedAt(now);
+            googleAccountRepository.save(account);
+
+            storageSnapshotService.recordSnapshot(account);
+            scanRunService.completeScanRun(scanRun, changesProcessed, newFiles, updatedFiles, 0);
+
+            log.info("Incremental sync completed for {}: changes={}, new={}, updated={}",
+                    account.getEmail(), changesProcessed, newFiles, updatedFiles);
+
+            return new ScanSummaryResponse(changesProcessed, newFiles, updatedFiles);
+        } catch (Exception ex) {
+            log.warn("Incremental sync failed or change token expired for {}: {}. Falling back to full scan.",
+                    account.getEmail(), ex.getMessage());
+            scanRunService.failScanRun(scanRun, "Token expired or error: " + ex.getMessage() + "; falling back to full scan.");
+            // Fall back gracefully to full scan
+            return scanAndSyncFiles(googleAccountId);
         }
+    }
 
-        // Step 4: Batch save files
-        if (!recordsToSave.isEmpty()) {
-            driveFileRepository.saveAll(recordsToSave);
+    /**
+     * Stage 17: Fetches current startPageToken from Google Drive API.
+     */
+    public String fetchStartPageToken(GoogleAccount account) {
+        try {
+            String accessToken = googleOAuthService.getValidAccessToken(account);
+            UriComponentsBuilder uriBuilder = UriComponentsBuilder.fromHttpUrl("https://www.googleapis.com/drive/v3/changes/startPageToken")
+                    .queryParam("supportsAllDrives", true);
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.setBearerAuth(accessToken);
+            HttpEntity<Void> request = new HttpEntity<>(headers);
+
+            ResponseEntity<com.example.drivehealth.dto.google.GoogleDriveStartPageTokenResponse> response = restTemplate.exchange(
+                    uriBuilder.toUriString(), HttpMethod.GET, request,
+                    com.example.drivehealth.dto.google.GoogleDriveStartPageTokenResponse.class
+            );
+
+            if (response.getBody() != null) {
+                return response.getBody().getStartPageToken();
+            }
+        } catch (Exception ex) {
+            log.warn("Could not fetch startPageToken for account {}: {}", account.getEmail(), ex.getMessage());
         }
+        return null;
+    }
 
-        // Step 5: Sync permissions using raw items (they already carry permission data)
-        List<DriveFile> allSavedFiles = driveFileRepository.findByGoogleAccount_Id(account.getId());
-        Map<String, DriveFile> savedFileMap = new HashMap<>();
-        for (DriveFile f : allSavedFiles) {
-            savedFileMap.put(f.getGoogleFileId(), f);
+    /**
+     * Syncs permissions for an individual file (used during incremental changes).
+     */
+    private void syncPermissionsForSingleFile(GoogleAccount account, DriveFile driveFile, List<GoogleDrivePermission> permissions) {
+        if (permissions == null || permissions.isEmpty()) {
+            return;
         }
-        syncPermissionsFromItems(account, rawItems, savedFileMap);
-
-        // Step 6: Update account's lastSyncedAt
-        account.setLastSyncedAt(now);
-        googleAccountRepository.save(account);
-
-        log.info("Scan completed for {}: scanned={}, new={}, updated={}",
-                account.getEmail(), filesScanned, newFiles, updatedFiles);
-
-        return new ScanSummaryResponse(filesScanned, newFiles, updatedFiles);
+        for (GoogleDrivePermission gPerm : permissions) {
+            if (gPerm.getId() == null || gPerm.getType() == null || gPerm.getRole() == null) {
+                continue;
+            }
+            Permission perm = new Permission();
+            perm.setGoogleAccount(account);
+            perm.setDriveFile(driveFile);
+            perm.setPermissionId(gPerm.getId());
+            perm.setType(gPerm.getType());
+            perm.setRole(gPerm.getRole());
+            perm.setEmailAddress(gPerm.getEmailAddress());
+            perm.setDisplayName(gPerm.getDisplayName());
+            perm.setDomain(gPerm.getDomain());
+            perm.setAllowFileDiscovery(gPerm.getAllowFileDiscovery());
+            perm.setExpirationTime(parseIsoDateTime(gPerm.getExpirationTime()));
+            permissionRepository.save(perm);
+        }
     }
 
     /**

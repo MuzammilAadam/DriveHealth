@@ -74,4 +74,15 @@ public interface DriveFileRepository extends JpaRepository<DriveFile, Long> {
 
     @Query("SELECT COUNT(f) FROM DriveFile f WHERE f.googleAccount.id = :googleAccountId")
     long countByGoogleAccountId(@Param("googleAccountId") Long googleAccountId);
+
+    @Query("SELECT COALESCE(SUM(f.size), 0) FROM DriveFile f WHERE f.googleAccount.id = :googleAccountId")
+    long sumSizeByGoogleAccountId(@Param("googleAccountId") Long googleAccountId);
+
+    @Query("SELECT COUNT(f) FROM DriveFile f WHERE f.googleAccount.id = :googleAccountId AND f.trashed = true")
+    long countByGoogleAccountIdAndTrashedTrue(@Param("googleAccountId") Long googleAccountId);
+
+    @Query("SELECT COALESCE(SUM(f.size), 0) FROM DriveFile f WHERE f.googleAccount.id = :googleAccountId AND f.trashed = true")
+    long sumTrashedSizeByGoogleAccountId(@Param("googleAccountId") Long googleAccountId);
+
+    void deleteByGoogleAccount_IdAndGoogleFileId(Long googleAccountId, String googleFileId);
 }

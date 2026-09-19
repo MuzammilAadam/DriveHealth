@@ -46,6 +46,15 @@ class GoogleDriveServiceTest {
     @Mock
     private RestTemplate restTemplate;
 
+    @Mock
+    private com.example.drivehealth.repository.PermissionRepository permissionRepository;
+
+    @Mock
+    private ScanRunService scanRunService;
+
+    @Mock
+    private StorageSnapshotService storageSnapshotService;
+
     @InjectMocks
     private GoogleDriveService googleDriveService;
 
@@ -79,23 +88,32 @@ class GoogleDriveServiceTest {
         initialDbFiles.add(existingFile);
         when(driveFileRepository.findByGoogleAccount_Id(10L)).thenReturn(initialDbFiles);
 
-        // Prepare mock remote files from Google Drive API
+        // Prepare mock remote items from Google Drive API
         // 1 updated file + 1 new file
-        List<DriveFileDto> remoteFiles = new ArrayList<>();
-        remoteFiles.add(new DriveFileDto(
-                "file-existing", "UpdatedName.pdf", "application/pdf", 1200L,
-                LocalDateTime.now().minusDays(10), LocalDateTime.now(), "root",
-                "http://drive/view/existing", "md5-updated", false, "developer@gmail.com"
-        ));
-        remoteFiles.add(new DriveFileDto(
-                "file-brand-new", "Report.docx", "application/vnd.google-apps.document", 2048L,
-                LocalDateTime.now(), LocalDateTime.now(), "root",
-                "http://drive/view/brand-new", "md5-new", false, "developer@gmail.com"
-        ));
+        List<com.example.drivehealth.dto.google.GoogleDriveFileItem> remoteItems = new ArrayList<>();
 
-        // Create a spy on GoogleDriveService to mock fetchAllFiles
+        com.example.drivehealth.dto.google.GoogleDriveFileItem item1 = new com.example.drivehealth.dto.google.GoogleDriveFileItem();
+        item1.setId("file-existing");
+        item1.setName("UpdatedName.pdf");
+        item1.setMimeType("application/pdf");
+        item1.setSize(1200L);
+        item1.setMd5Checksum("md5-updated");
+        item1.setTrashed(false);
+        remoteItems.add(item1);
+
+        com.example.drivehealth.dto.google.GoogleDriveFileItem item2 = new com.example.drivehealth.dto.google.GoogleDriveFileItem();
+        item2.setId("file-brand-new");
+        item2.setName("Report.docx");
+        item2.setMimeType("application/vnd.google-apps.document");
+        item2.setSize(2048L);
+        item2.setMd5Checksum("md5-new");
+        item2.setTrashed(false);
+        remoteItems.add(item2);
+
+        // Create a spy on GoogleDriveService to mock fetchAllFileItems
         GoogleDriveService spyService = org.mockito.Mockito.spy(googleDriveService);
-        doReturn(remoteFiles).when(spyService).fetchAllFiles(10L);
+        doReturn(remoteItems).when(spyService).fetchAllFileItems(10L);
+        when(scanRunService.startScanRun(any(), any())).thenReturn(new com.example.drivehealth.entity.ScanRun(testAccount, "FULL"));
 
         // Execute scan
         ScanSummaryResponse summary = spyService.scanAndSyncFiles(10L);

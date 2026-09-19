@@ -10,4 +10,6 @@ import java.util.List;
 public interface DuplicateGroupFileRepository extends JpaRepository<DuplicateGroupFile, Long> {
 
     List<DuplicateGroupFile> findByDuplicateGroup_Id(Long duplicateGroupId);
+
+    long countByDuplicateGroup_GoogleAccount_Id(Long googleAccountId);
 }

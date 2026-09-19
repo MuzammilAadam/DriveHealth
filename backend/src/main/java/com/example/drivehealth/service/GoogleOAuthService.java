@@ -337,4 +337,12 @@ public class GoogleOAuthService {
                 .orElseThrow(() -> new ResourceNotFoundException("User not found with id: " + userId));
         return mapToUserResponse(user);
     }
+
+    public UserResponse getCurrentUserProfile() {
+        List<User> users = userRepository.findAll();
+        if (users.isEmpty()) {
+            throw new ResourceNotFoundException("No user profile found. Please authenticate with Google first.");
+        }
+        return mapToUserResponse(users.get(0));
+    }
 }

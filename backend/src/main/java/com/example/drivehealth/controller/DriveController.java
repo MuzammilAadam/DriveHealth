@@ -62,9 +62,15 @@ public class DriveController {
      */
     @PostMapping("/scan")
     public ResponseEntity<ScanSummaryResponse> scanDrive(
-            @RequestParam(name = "accountId", required = false) Long accountId) {
+            @RequestParam(name = "accountId", required = false) Long accountId,
+            @RequestParam(name = "incremental", defaultValue = "false") boolean incremental) {
 
-        ScanSummaryResponse response = googleDriveService.scanAndSyncFiles(accountId);
+        ScanSummaryResponse response;
+        if (incremental) {
+            response = googleDriveService.syncChanges(accountId);
+        } else {
+            response = googleDriveService.scanAndSyncFiles(accountId);
+        }
         return ResponseEntity.ok(response);
     }
 

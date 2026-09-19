@@ -45,15 +45,18 @@ public class PermissionAnalysisService {
     private final DriveFileRepository driveFileRepository;
     private final PermissionRepository permissionRepository;
     private final AnalysisFindingRepository analysisFindingRepository;
+    private final UserRuleService userRuleService;
 
     public PermissionAnalysisService(GoogleAccountRepository googleAccountRepository,
                                       DriveFileRepository driveFileRepository,
                                       PermissionRepository permissionRepository,
-                                      AnalysisFindingRepository analysisFindingRepository) {
+                                      AnalysisFindingRepository analysisFindingRepository,
+                                      @org.springframework.beans.factory.annotation.Autowired(required = false) UserRuleService userRuleService) {
         this.googleAccountRepository = googleAccountRepository;
         this.driveFileRepository = driveFileRepository;
         this.permissionRepository = permissionRepository;
         this.analysisFindingRepository = analysisFindingRepository;
+        this.userRuleService = userRuleService;
     }
 
     /**
@@ -101,6 +104,12 @@ public class PermissionAnalysisService {
             List<Permission> filePerms = entry.getValue();
             DriveFile driveFile = fileById.get(fileId);
             if (driveFile == null) {
+                continue;
+            }
+
+            // Respect user rules (skip ignored folders or MIME types)
+            if (userRuleService != null && (userRuleService.isFolderIgnored(account.getId(), driveFile.getParentId())
+                    || userRuleService.isMimeTypeIgnored(account.getId(), driveFile.getMimeType()))) {
                 continue;
             }
 
