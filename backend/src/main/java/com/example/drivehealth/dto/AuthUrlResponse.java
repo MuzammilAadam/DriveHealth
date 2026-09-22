@@ -18,4 +18,12 @@ public class AuthUrlResponse {
     public void setAuthorizationUrl(String authorizationUrl) {
         this.authorizationUrl = authorizationUrl;
     }
+
+    public String getAuthUrl() {
+        return authorizationUrl;
+    }
+
+    public void setAuthUrl(String authUrl) {
+        this.authorizationUrl = authUrl;
+    }
 }
