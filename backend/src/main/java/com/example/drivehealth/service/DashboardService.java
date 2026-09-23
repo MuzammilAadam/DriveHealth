@@ -11,6 +11,7 @@ import com.example.drivehealth.repository.DriveFileRepository;
 import com.example.drivehealth.repository.DuplicateGroupFileRepository;
 import com.example.drivehealth.repository.DuplicateGroupRepository;
 import com.example.drivehealth.repository.GoogleAccountRepository;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -27,25 +28,28 @@ public class DashboardService {
     private final AnalysisFindingRepository analysisFindingRepository;
     private final DuplicateGroupRepository duplicateGroupRepository;
     private final DuplicateGroupFileRepository duplicateGroupFileRepository;
+    private final GoogleDriveService googleDriveService;
 
     public DashboardService(GoogleAccountRepository googleAccountRepository,
                             DriveFileRepository driveFileRepository,
                             AnalysisFindingRepository analysisFindingRepository,
                             DuplicateGroupRepository duplicateGroupRepository,
-                            DuplicateGroupFileRepository duplicateGroupFileRepository) {
+                            DuplicateGroupFileRepository duplicateGroupFileRepository,
+                            @Lazy GoogleDriveService googleDriveService) {
         this.googleAccountRepository = googleAccountRepository;
         this.driveFileRepository = driveFileRepository;
         this.analysisFindingRepository = analysisFindingRepository;
         this.duplicateGroupRepository = duplicateGroupRepository;
         this.duplicateGroupFileRepository = duplicateGroupFileRepository;
+        this.googleDriveService = googleDriveService;
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public DashboardSummaryResponse getDashboardSummary(Long googleAccountId) {
         GoogleAccount account = resolveAccount(googleAccountId);
         Long accountId = account.getId();
 
-        // 1. Storage & file metrics
+        // 1. Storage & file metrics from local DB
         long totalFiles = driveFileRepository.countByGoogleAccountId(accountId);
         long totalStorageBytes = driveFileRepository.sumSizeByGoogleAccountId(accountId);
         long trashedFiles = driveFileRepository.countByGoogleAccountIdAndTrashedTrue(accountId);
@@ -66,6 +70,14 @@ public class DashboardService {
         long externalShares = analysisFindingRepository.countByGoogleAccount_IdAndFindingType(accountId, FindingType.EXTERNAL_SHARE);
         long publicFiles = analysisFindingRepository.countByGoogleAccount_IdAndFindingType(accountId, FindingType.PUBLIC_FILE);
 
+        // 4. If storage quota hasn't been fetched yet, try fetching live
+        if (account.getStorageQuotaUsage() == null) {
+            try {
+                googleDriveService.syncStorageQuota(account);
+            } catch (Exception ignored) {
+            }
+        }
+
         return new DashboardSummaryResponse(
                 accountId,
                 account.getEmail(),
@@ -82,14 +94,24 @@ public class DashboardService {
                 oldFiles,
                 largeFiles,
                 externalShares,
-                publicFiles
+                publicFiles,
+                account.getStorageQuotaLimit(),
+                account.getStorageQuotaUsage(),
+                account.getStorageQuotaUsageInDrive(),
+                account.getStorageQuotaUsageInDriveTrash()
         );
     }
 
     private GoogleAccount resolveAccount(Long googleAccountId) {
         if (googleAccountId != null) {
             return googleAccountRepository.findById(googleAccountId)
-                    .orElseThrow(() -> new ResourceNotFoundException("Google account not found with id: " + googleAccountId));
+                    .orElseGet(() -> {
+                        List<GoogleAccount> accounts = googleAccountRepository.findAll();
+                        if (!accounts.isEmpty()) {
+                            return accounts.get(0);
+                        }
+                        throw new ResourceNotFoundException("Google account not found with id: " + googleAccountId);
+                    });
         }
 
         List<GoogleAccount> accounts = googleAccountRepository.findAll();

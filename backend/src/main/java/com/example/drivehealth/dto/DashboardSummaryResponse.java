@@ -29,6 +29,12 @@ public class DashboardSummaryResponse {
     private long externalShares;
     private long publicFiles;
 
+    // Google Drive Live Storage Quota
+    private Long storageQuotaLimit;
+    private Long storageQuotaUsage;
+    private Long storageQuotaUsageInDrive;
+    private Long storageQuotaUsageInDriveTrash;
+
     public DashboardSummaryResponse(Long googleAccountId, String accountEmail,
                                      long totalFiles, long totalStorageBytes, long trashedFiles,
                                      long totalFindings, long openFindings, long ignoredFindings,
@@ -36,6 +42,21 @@ public class DashboardSummaryResponse {
                                      long duplicateGroups, long duplicateFiles,
                                      long oldFiles, long largeFiles,
                                      long externalShares, long publicFiles) {
+        this(googleAccountId, accountEmail, totalFiles, totalStorageBytes, trashedFiles,
+             totalFindings, openFindings, ignoredFindings, resolvedFindings, highSeverityOpenFindings,
+             duplicateGroups, duplicateFiles, oldFiles, largeFiles, externalShares, publicFiles,
+             null, null, null, null);
+    }
+
+    public DashboardSummaryResponse(Long googleAccountId, String accountEmail,
+                                     long totalFiles, long totalStorageBytes, long trashedFiles,
+                                     long totalFindings, long openFindings, long ignoredFindings,
+                                     long resolvedFindings, long highSeverityOpenFindings,
+                                     long duplicateGroups, long duplicateFiles,
+                                     long oldFiles, long largeFiles,
+                                     long externalShares, long publicFiles,
+                                     Long storageQuotaLimit, Long storageQuotaUsage,
+                                     Long storageQuotaUsageInDrive, Long storageQuotaUsageInDriveTrash) {
         this.googleAccountId = googleAccountId;
         this.accountEmail = accountEmail;
         this.totalFiles = totalFiles;
@@ -53,6 +74,10 @@ public class DashboardSummaryResponse {
         this.largeFiles = largeFiles;
         this.externalShares = externalShares;
         this.publicFiles = publicFiles;
+        this.storageQuotaLimit = storageQuotaLimit;
+        this.storageQuotaUsage = storageQuotaUsage;
+        this.storageQuotaUsageInDrive = storageQuotaUsageInDrive;
+        this.storageQuotaUsageInDriveTrash = storageQuotaUsageInDriveTrash;
     }
 
     public Long getGoogleAccountId() { return googleAccountId; }
@@ -72,4 +97,9 @@ public class DashboardSummaryResponse {
     public long getLargeFiles() { return largeFiles; }
     public long getExternalShares() { return externalShares; }
     public long getPublicFiles() { return publicFiles; }
+
+    public Long getStorageQuotaLimit() { return storageQuotaLimit; }
+    public Long getStorageQuotaUsage() { return storageQuotaUsage; }
+    public Long getStorageQuotaUsageInDrive() { return storageQuotaUsageInDrive; }
+    public Long getStorageQuotaUsageInDriveTrash() { return storageQuotaUsageInDriveTrash; }
 }

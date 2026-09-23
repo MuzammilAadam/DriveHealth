@@ -9,6 +9,7 @@ import com.example.drivehealth.repository.ScanRunRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
@@ -35,7 +36,7 @@ public class ScanRunService {
     /**
      * Starts a new scan run record in IN_PROGRESS status.
      */
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public ScanRun startScanRun(GoogleAccount account, String scanType) {
         ScanRun run = new ScanRun(account, scanType);
         ScanRun saved = scanRunRepository.save(run);
@@ -46,7 +47,7 @@ public class ScanRunService {
     /**
      * Completes an existing scan run record with success stats.
      */
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void completeScanRun(ScanRun scanRun, int filesScanned, int newFiles, int updatedFiles, int findingsCreated) {
         scanRun.setStatus("COMPLETED");
         scanRun.setCompletedAt(LocalDateTime.now());
@@ -62,7 +63,7 @@ public class ScanRunService {
     /**
      * Records a failed scan run with error information.
      */
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void failScanRun(ScanRun scanRun, String errorMessage) {
         scanRun.setStatus("FAILED");
         scanRun.setCompletedAt(LocalDateTime.now());

@@ -65,4 +65,12 @@ public class UserResponse {
     public void setAccounts(List<GoogleAccountResponse> accounts) {
         this.accounts = accounts;
     }
+
+    public List<GoogleAccountResponse> getGoogleAccounts() {
+        return accounts;
+    }
+
+    public void setGoogleAccounts(List<GoogleAccountResponse> googleAccounts) {
+        this.accounts = googleAccounts;
+    }
 }

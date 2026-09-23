@@ -88,6 +88,7 @@ public class GoogleOAuthService {
                 .queryParam("access_type", "offline")
                 // prompt=consent ensures Google shows the consent screen and provides a refresh_token every time
                 .queryParam("prompt", "consent")
+                .encode()
                 .build()
                 .toUriString();
     }
@@ -120,8 +121,14 @@ public class GoogleOAuthService {
         log.info("Successfully connected Google Account: {} for User: {}", googleAccount.getEmail(), user.getEmail());
 
         // 5. Construct safe responses without exposing tokens
-        UserResponse userResponse = mapToUserResponse(user);
         GoogleAccountResponse accountResponse = mapToGoogleAccountResponse(googleAccount);
+        UserResponse userResponse = new UserResponse(
+                user.getId(),
+                user.getEmail(),
+                user.getName(),
+                user.getCreatedAt(),
+                List.of(accountResponse)
+        );
 
         return new AuthSuccessResponse("Google account connected successfully", userResponse, accountResponse);
     }
@@ -328,21 +335,36 @@ public class GoogleOAuthService {
                 account.getName(),
                 account.getPictureUrl(),
                 account.getConnectedAt(),
-                account.getLastSyncedAt()
+                account.getLastSyncedAt(),
+                account.getStorageQuotaLimit(),
+                account.getStorageQuotaUsage(),
+                account.getStorageQuotaUsageInDrive(),
+                account.getStorageQuotaUsageInDriveTrash()
         );
     }
 
+    @Transactional(readOnly = true)
     public UserResponse getUserProfile(Long userId) {
-        User user = userRepository.findById(userId)
+        User user = userRepository.findWithGoogleAccountsById(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("User not found with id: " + userId));
         return mapToUserResponse(user);
     }
 
     public UserResponse getCurrentUserProfile() {
-        List<User> users = userRepository.findAll();
-        if (users.isEmpty()) {
-            throw new ResourceNotFoundException("No user profile found. Please authenticate with Google first.");
-        }
-        return mapToUserResponse(users.get(0));
+        return getCurrentUserProfile(null);
     }
+
+    public UserResponse getCurrentUserProfile(Long userId) {
+        if (userId != null) {
+            return getUserProfile(userId);
+        }
+        throw new ResourceNotFoundException("No user profile found. Please authenticate with Google first.");
+    }
+
+    public List<UserResponse> getAllUsers() {
+        return userRepository.findAll().stream()
+                .map(this::mapToUserResponse)
+                .toList();
+    }
+
 }

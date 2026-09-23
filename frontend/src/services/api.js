@@ -5,7 +5,15 @@ const api = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
-  timeout: 30000,
+  timeout: 120000,
+})
+
+api.interceptors.request.use((config) => {
+  const userId = localStorage.getItem('drivehealth_user_id')
+  if (userId) {
+    config.headers['X-User-Id'] = userId
+  }
+  return config
 })
 
 api.interceptors.response.use(
@@ -21,3 +29,4 @@ api.interceptors.response.use(
 )
 
 export default api
+

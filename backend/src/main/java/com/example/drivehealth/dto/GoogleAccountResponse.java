@@ -15,6 +15,10 @@ public class GoogleAccountResponse {
     private String pictureUrl;
     private LocalDateTime connectedAt;
     private LocalDateTime lastSyncedAt;
+    private Long storageQuotaLimit;
+    private Long storageQuotaUsage;
+    private Long storageQuotaUsageInDrive;
+    private Long storageQuotaUsageInDriveTrash;
 
     public GoogleAccountResponse() {
     }
@@ -28,6 +32,23 @@ public class GoogleAccountResponse {
         this.pictureUrl = pictureUrl;
         this.connectedAt = connectedAt;
         this.lastSyncedAt = lastSyncedAt;
+    }
+
+    public GoogleAccountResponse(Long id, String googleUserId, String email, String name, 
+                                 String pictureUrl, LocalDateTime connectedAt, LocalDateTime lastSyncedAt,
+                                 Long storageQuotaLimit, Long storageQuotaUsage, 
+                                 Long storageQuotaUsageInDrive, Long storageQuotaUsageInDriveTrash) {
+        this.id = id;
+        this.googleUserId = googleUserId;
+        this.email = email;
+        this.name = name;
+        this.pictureUrl = pictureUrl;
+        this.connectedAt = connectedAt;
+        this.lastSyncedAt = lastSyncedAt;
+        this.storageQuotaLimit = storageQuotaLimit;
+        this.storageQuotaUsage = storageQuotaUsage;
+        this.storageQuotaUsageInDrive = storageQuotaUsageInDrive;
+        this.storageQuotaUsageInDriveTrash = storageQuotaUsageInDriveTrash;
     }
 
     public Long getId() {
@@ -84,5 +105,37 @@ public class GoogleAccountResponse {
 
     public void setLastSyncedAt(LocalDateTime lastSyncedAt) {
         this.lastSyncedAt = lastSyncedAt;
+    }
+
+    public Long getStorageQuotaLimit() {
+        return storageQuotaLimit;
+    }
+
+    public void setStorageQuotaLimit(Long storageQuotaLimit) {
+        this.storageQuotaLimit = storageQuotaLimit;
+    }
+
+    public Long getStorageQuotaUsage() {
+        return storageQuotaUsage;
+    }
+
+    public void setStorageQuotaUsage(Long storageQuotaUsage) {
+        this.storageQuotaUsage = storageQuotaUsage;
+    }
+
+    public Long getStorageQuotaUsageInDrive() {
+        return storageQuotaUsageInDrive;
+    }
+
+    public void setStorageQuotaUsageInDrive(Long storageQuotaUsageInDrive) {
+        this.storageQuotaUsageInDrive = storageQuotaUsageInDrive;
+    }
+
+    public Long getStorageQuotaUsageInDriveTrash() {
+        return storageQuotaUsageInDriveTrash;
+    }
+
+    public void setStorageQuotaUsageInDriveTrash(Long storageQuotaUsageInDriveTrash) {
+        this.storageQuotaUsageInDriveTrash = storageQuotaUsageInDriveTrash;
     }
 }

@@ -88,4 +88,25 @@ public class DriveController {
         List<DriveFileResponse> response = googleDriveService.getStoredFiles(accountId);
         return ResponseEntity.ok(response);
     }
+
+    /**
+     * Retrieves actual Google Drive storage quota (limit, usage, drive usage, trash).
+     * Example: GET /api/drive/storage-quota?accountId=1
+     */
+    @GetMapping("/storage-quota")
+    public ResponseEntity<com.example.drivehealth.dto.StorageQuotaResponse> getStorageQuota(
+            @RequestParam(name = "accountId", required = false) Long accountId) {
+        return ResponseEntity.ok(googleDriveService.getStorageQuota(accountId));
+    }
+
+    /**
+     * Force refreshes actual Google Drive storage quota from Google Drive API.
+     * Example: POST /api/drive/storage-quota/sync?accountId=1
+     */
+    @PostMapping("/storage-quota/sync")
+    public ResponseEntity<com.example.drivehealth.dto.StorageQuotaResponse> syncStorageQuota(
+            @RequestParam(name = "accountId", required = false) Long accountId) {
+        var account = googleDriveService.getAccount(accountId);
+        return ResponseEntity.ok(googleDriveService.syncStorageQuota(account));
+    }
 }

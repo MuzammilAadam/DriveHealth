@@ -77,6 +77,19 @@ public class GoogleAccount {
     @Column(name = "change_token", length = 255)
     private String changeToken;
 
+    // Google Drive Storage Quota in bytes
+    @Column(name = "storage_quota_limit")
+    private Long storageQuotaLimit;
+
+    @Column(name = "storage_quota_usage")
+    private Long storageQuotaUsage;
+
+    @Column(name = "storage_quota_usage_in_drive")
+    private Long storageQuotaUsageInDrive;
+
+    @Column(name = "storage_quota_usage_in_drive_trash")
+    private Long storageQuotaUsageInDriveTrash;
+
     public GoogleAccount() {
     }
 
@@ -197,5 +210,37 @@ public class GoogleAccount {
 
     public void setChangeToken(String changeToken) {
         this.changeToken = changeToken;
+    }
+
+    public Long getStorageQuotaLimit() {
+        return storageQuotaLimit;
+    }
+
+    public void setStorageQuotaLimit(Long storageQuotaLimit) {
+        this.storageQuotaLimit = storageQuotaLimit;
+    }
+
+    public Long getStorageQuotaUsage() {
+        return storageQuotaUsage;
+    }
+
+    public void setStorageQuotaUsage(Long storageQuotaUsage) {
+        this.storageQuotaUsage = storageQuotaUsage;
+    }
+
+    public Long getStorageQuotaUsageInDrive() {
+        return storageQuotaUsageInDrive;
+    }
+
+    public void setStorageQuotaUsageInDrive(Long storageQuotaUsageInDrive) {
+        this.storageQuotaUsageInDrive = storageQuotaUsageInDrive;
+    }
+
+    public Long getStorageQuotaUsageInDriveTrash() {
+        return storageQuotaUsageInDriveTrash;
+    }
+
+    public void setStorageQuotaUsageInDriveTrash(Long storageQuotaUsageInDriveTrash) {
+        this.storageQuotaUsageInDriveTrash = storageQuotaUsageInDriveTrash;
     }
 }
