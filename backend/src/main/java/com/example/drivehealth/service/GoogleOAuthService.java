@@ -50,8 +50,8 @@ public class GoogleOAuthService {
 
     // Required Google Scopes:
     // - openid, email, profile: identity and basic profile information
-    // - drive.metadata.readonly: read file and folder metadata (read-only, does not download file contents)
-    private static final String SCOPES = "openid email profile https://www.googleapis.com/auth/drive.metadata.readonly";
+    // - drive: full Google Drive access (read metadata, delete files, upload files)
+    private static final String SCOPES = "openid email profile https://www.googleapis.com/auth/drive";
 
     @Value("${google.client.id}")
     private String clientId;

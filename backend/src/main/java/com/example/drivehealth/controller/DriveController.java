@@ -5,12 +5,16 @@ import com.example.drivehealth.dto.DriveFilesPageResponse;
 import com.example.drivehealth.dto.ScanSummaryResponse;
 import com.example.drivehealth.service.GoogleDriveService;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
 import java.util.List;
 
 /**
@@ -108,5 +112,31 @@ public class DriveController {
             @RequestParam(name = "accountId", required = false) Long accountId) {
         var account = googleDriveService.getAccount(accountId);
         return ResponseEntity.ok(googleDriveService.syncStorageQuota(account));
+    }
+
+    /**
+     * Deletes a file from Google Drive and removes it from the local DB.
+     * DELETE /api/drive/files/{googleFileId}?accountId=1
+     */
+    @DeleteMapping("/files/{googleFileId}")
+    public ResponseEntity<Void> deleteFile(
+            @PathVariable("googleFileId") String googleFileId,
+            @RequestParam(name = "accountId", required = false) Long accountId) {
+        googleDriveService.deleteFile(accountId, googleFileId);
+        return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * Uploads a file to Google Drive and indexes it locally.
+     * POST /api/drive/files/upload?accountId=1
+     */
+    @PostMapping("/files/upload")
+    public ResponseEntity<DriveFileResponse> uploadFile(
+            @RequestParam(name = "accountId", required = false) Long accountId,
+            @RequestParam("file") MultipartFile file) throws IOException {
+        String originalFilename = file.getOriginalFilename() != null ? file.getOriginalFilename() : "upload";
+        String mimeType = file.getContentType() != null ? file.getContentType() : "application/octet-stream";
+        DriveFileResponse response = googleDriveService.uploadFile(accountId, originalFilename, mimeType, file.getBytes());
+        return ResponseEntity.ok(response);
     }
 }

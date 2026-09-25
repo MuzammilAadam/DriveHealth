@@ -26,6 +26,20 @@ export const scanDrive = (incremental = false, accountId) =>
 export const getStoredFiles = (accountId) =>
   api.get('/drive/stored-files', { params: withAccountId({}, accountId) }).then((r) => r.data)
 
+export const deleteFile = (googleFileId, accountId) =>
+  api.delete(`/drive/files/${googleFileId}`, { params: withAccountId({}, accountId) }).then((r) => r.data)
+
+export const uploadFile = (file, accountId) => {
+  const formData = new FormData()
+  formData.append('file', file)
+  const params = withAccountId({}, accountId)
+  const queryString = new URLSearchParams(params).toString()
+  return api.post(`/drive/files/upload${queryString ? `?${queryString}` : ''}`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 300000, // 5 minute timeout for uploads
+  }).then((r) => r.data)
+}
+
 export const getStorageQuota = (accountId) =>
   api.get('/drive/storage-quota', { params: withAccountId({}, accountId) }).then((r) => r.data)
 

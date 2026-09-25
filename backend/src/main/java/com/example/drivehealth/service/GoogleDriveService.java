@@ -770,4 +770,111 @@ public class GoogleDriveService {
         log.error("Failed to fetch files from Google Drive for account {}: {}", account.getEmail(), ex.getMessage());
         return new OAuthException("Error communicating with Google Drive API: " + ex.getMessage(), ex);
     }
+
+    /**
+     * Deletes a file from Google Drive by its googleFileId, then removes from local DB.
+     */
+    @Transactional
+    public void deleteFile(Long googleAccountId, String googleFileId) {
+        GoogleAccount account = getAccount(googleAccountId);
+        String accessToken = googleOAuthService.getValidAccessToken(account);
+
+        // Call Google Drive DELETE /files/{fileId}
+        String deleteUrl = DRIVE_FILES_API_URL + "/" + googleFileId;
+        HttpHeaders headers = new HttpHeaders();
+        headers.setBearerAuth(accessToken);
+        HttpEntity<Void> request = new HttpEntity<>(headers);
+
+        try {
+            restTemplate.exchange(deleteUrl, HttpMethod.DELETE, request, Void.class);
+            log.info("Deleted file {} from Google Drive for account {}", googleFileId, account.getEmail());
+        } catch (HttpClientErrorException e) {
+            if (e.getStatusCode().value() == 404) {
+                log.warn("File {} not found in Google Drive (may already be deleted); removing from local DB.", googleFileId);
+            } else {
+                throw translateGoogleDriveException(e, account);
+            }
+        } catch (Exception ex) {
+            throw translateGoogleDriveException(ex, account);
+        }
+
+        // Remove from local DB
+        driveFileRepository.findByGoogleAccount_IdAndGoogleFileId(account.getId(), googleFileId)
+                .ifPresent(f -> {
+                    permissionRepository.deleteByDriveFileId(f.getId());
+                    permissionRepository.flush();
+                    driveFileRepository.delete(f);
+                });
+        log.info("Removed file {} from local DB for account {}", googleFileId, account.getEmail());
+    }
+
+    /**
+     * Uploads a file to Google Drive (multipart upload), then indexes it in local DB.
+     */
+    @Transactional
+    public DriveFileResponse uploadFile(Long googleAccountId, String filename, String mimeType, byte[] content) {
+        GoogleAccount account = getAccount(googleAccountId);
+        String accessToken = googleOAuthService.getValidAccessToken(account);
+
+        // Use Google Drive multipart upload endpoint
+        String uploadUrl = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,mimeType,size,createdTime,modifiedTime,parents,webViewLink,md5Checksum,trashed,owners";
+
+        // Build multipart body manually
+        String boundary = "-------314159265358979323846";
+        String metadataJson = "{\"name\":\"" + filename.replace("\"", "\\\"") + "\"}";
+
+        org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
+        headers.setBearerAuth(accessToken);
+        headers.setContentType(org.springframework.http.MediaType.parseMediaType("multipart/related; boundary=" + boundary));
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("--").append(boundary).append("\r\n");
+        sb.append("Content-Type: application/json; charset=UTF-8\r\n\r\n");
+        sb.append(metadataJson).append("\r\n");
+        sb.append("--").append(boundary).append("\r\n");
+        sb.append("Content-Type: ").append(mimeType).append("\r\n");
+        sb.append("Content-Transfer-Encoding: base64\r\n\r\n");
+
+        String encodedContent = java.util.Base64.getEncoder().encodeToString(content);
+        sb.append(encodedContent).append("\r\n");
+        sb.append("--").append(boundary).append("--");
+
+        HttpEntity<String> uploadRequest = new HttpEntity<>(sb.toString(), headers);
+
+        try {
+            ResponseEntity<GoogleDriveFileItem> response = restTemplate.postForEntity(
+                    uploadUrl,
+                    uploadRequest,
+                    GoogleDriveFileItem.class
+            );
+
+            GoogleDriveFileItem item = response.getBody();
+            if (item == null || item.getId() == null) {
+                throw new OAuthException("Upload to Google Drive returned empty response");
+            }
+
+            // Index the new file locally
+            DriveFileDto dto = mapToDriveFileDto(item);
+            DriveFile newFile = new DriveFile();
+            newFile.setGoogleAccount(account);
+            newFile.setGoogleFileId(dto.getId());
+            newFile.setName(dto.getName());
+            newFile.setMimeType(dto.getMimeType());
+            newFile.setSize(dto.getSize() != null ? dto.getSize() : (long) content.length);
+            newFile.setCreatedTime(dto.getCreatedTime());
+            newFile.setModifiedTime(dto.getModifiedTime());
+            newFile.setParentId(dto.getParentId());
+            newFile.setWebUrl(dto.getWebUrl());
+            newFile.setMd5Checksum(dto.getMd5Checksum());
+            newFile.setTrashed(false);
+            newFile.setOwnerEmail(dto.getOwnerEmail());
+            newFile.setIndexedAt(LocalDateTime.now());
+            DriveFile saved = driveFileRepository.save(newFile);
+
+            log.info("Uploaded and indexed file '{}' (id={}) for account {}", filename, item.getId(), account.getEmail());
+            return mapToDriveFileResponse(saved);
+        } catch (Exception ex) {
+            throw translateGoogleDriveException(ex, account);
+        }
+    }
 }
