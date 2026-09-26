@@ -195,9 +195,6 @@ public class GoogleOAuthService {
         }
     }
 
-    /**
-     * Refreshes an expired access token using the stored refresh token.
-     */
     @Transactional
     public String refreshAccessToken(GoogleAccount account) {
         if (account.getRefreshToken() == null) {
@@ -304,9 +301,6 @@ public class GoogleOAuthService {
         return googleAccountRepository.save(account);
     }
 
-    /**
-     * Helper to map User entity to UserResponse DTO.
-     */
     public UserResponse mapToUserResponse(User user) {
         List<GoogleAccountResponse> accountResponses = new ArrayList<>();
         if (user.getGoogleAccounts() != null) {
