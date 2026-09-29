@@ -13,6 +13,9 @@ import {
   AlertTriangle,
   CheckCircle2,
   CloudUpload,
+  FolderPlus,
+  HardDrive,
+  Folder,
 } from 'lucide-react'
 import Loading from '../components/common/Loading'
 import ErrorMessage from '../components/common/ErrorMessage'
@@ -23,6 +26,7 @@ import {
   getFindings,
   deleteFile,
   uploadFile,
+  createFolder,
   formatBytes,
   formatDate,
   formatDateTime,
@@ -50,9 +54,20 @@ export default function FilesExplorer() {
   const [sortBy, setSortBy] = useState('size_desc')
   const [selectedFile, setSelectedFile] = useState(null)
 
+  // Folder Navigation State
+  // folderPath: array of { googleFileId: string | null, name: string }
+  const [folderPath, setFolderPath] = useState([
+    { googleFileId: null, name: 'My Drive' },
+  ])
+
+  // Current folder is the last element in folderPath
+  const currentFolder = useMemo(() => {
+    return folderPath[folderPath.length - 1]
+  }, [folderPath])
+
   // Delete state
   const [deletingFileId, setDeletingFileId] = useState(null)
-  const [deleteConfirm, setDeleteConfirm] = useState(null) // googleFileId to confirm
+  const [deleteConfirm, setDeleteConfirm] = useState(null) // file object
   const [deleteError, setDeleteError] = useState(null)
   const [deleteSuccess, setDeleteSuccess] = useState(null)
 
@@ -63,6 +78,12 @@ export default function FilesExplorer() {
   const [showUploadModal, setShowUploadModal] = useState(false)
   const [uploadDragOver, setUploadDragOver] = useState(false)
   const fileInputRef = useRef(null)
+
+  // New Folder state
+  const [showNewFolderModal, setShowNewFolderModal] = useState(false)
+  const [newFolderName, setNewFolderName] = useState('')
+  const [creatingFolder, setCreatingFolder] = useState(false)
+  const [createFolderError, setCreateFolderError] = useState(null)
 
   const loadData = async () => {
     setLoading(true)
@@ -75,7 +96,7 @@ export default function FilesExplorer() {
       setFiles(storedFiles || [])
       setFindings(allFindings || [])
       if (selectedFile) {
-        const refreshed = storedFiles.find((f) => f.id === selectedFile.id)
+        const refreshed = (storedFiles || []).find((f) => f.id === selectedFile.id)
         setSelectedFile(refreshed || null)
       }
     } catch (err) {
@@ -89,19 +110,48 @@ export default function FilesExplorer() {
     loadData()
   }, [activeAccountId])
 
-  // Filter & sort files
+  // Set of all known folder IDs in the dataset
+  const allFolderIds = useMemo(() => {
+    const ids = new Set()
+    files.forEach((f) => {
+      if (f.mimeType === 'application/vnd.google-apps.folder' && f.googleFileId) {
+        ids.add(f.googleFileId)
+      }
+    })
+    return ids
+  }, [files])
+
+  // Hierarchical Scope Filtering & Sorting
   const filteredFiles = useMemo(() => {
+    const isSearchActive = searchQuery.trim() !== ''
+
     return files
       .filter((file) => {
-        if (searchQuery.trim()) {
+        // Search Filter
+        if (isSearchActive) {
           const q = searchQuery.toLowerCase()
           const matchName = file.name?.toLowerCase().includes(q)
           const matchMime = file.mimeType?.toLowerCase().includes(q)
           if (!matchName && !matchMime) return false
+        } else {
+          // Hierarchy Filter (when not searching)
+          if (currentFolder.googleFileId === null) {
+            // At ROOT: show items whose parentId is null, empty, 'root', or not matching any folder in our DB
+            const isTopLevel =
+              !file.parentId ||
+              file.parentId === 'root' ||
+              !allFolderIds.has(file.parentId)
+            if (!isTopLevel) return false
+          } else {
+            // Inside Folder: show items whose parentId matches currentFolder.googleFileId
+            if (file.parentId !== currentFolder.googleFileId) return false
+          }
         }
 
+        // Category Filter
         if (selectedCategory !== 'ALL') {
           const mime = (file.mimeType || '').toLowerCase()
+          // Folders are not hidden if we are displaying all, but for specific file types:
           if (selectedCategory === 'DOCS' && !mime.includes('document') && !mime.includes('word')) return false
           if (selectedCategory === 'SHEETS' && !mime.includes('spreadsheet') && !mime.includes('sheet')) return false
           if (selectedCategory === 'SLIDES' && !mime.includes('presentation')) return false
@@ -126,6 +176,14 @@ export default function FilesExplorer() {
         return true
       })
       .sort((a, b) => {
+        const isAFolder = a.mimeType === 'application/vnd.google-apps.folder'
+        const isBFolder = b.mimeType === 'application/vnd.google-apps.folder'
+
+        // Requirement 1: Show folders first, then files
+        if (isAFolder && !isBFolder) return -1
+        if (!isAFolder && isBFolder) return 1
+
+        // Sort among folders or among files according to selected criterion
         if (sortBy === 'size_desc') return (b.sizeBytes || 0) - (a.sizeBytes || 0)
         if (sortBy === 'size_asc') return (a.sizeBytes || 0) - (b.sizeBytes || 0)
         if (sortBy === 'date_desc')
@@ -133,10 +191,24 @@ export default function FilesExplorer() {
         if (sortBy === 'name_asc') return (a.name || '').localeCompare(b.name || '')
         return 0
       })
-  }, [files, searchQuery, selectedCategory, sortBy])
+  }, [files, currentFolder, allFolderIds, searchQuery, selectedCategory, sortBy])
 
   const getFileFindings = (fileId) => {
     return findings.filter((f) => f.driveFileId === fileId)
+  }
+
+  // ── Navigation handlers ──────────────────────────────────────────────────────
+  const handleOpenFolder = (folderFile) => {
+    setFolderPath((prev) => [
+      ...prev,
+      { googleFileId: folderFile.googleFileId, name: folderFile.name },
+    ])
+    setSelectedFile(null)
+  }
+
+  const handleBreadcrumbClick = (index) => {
+    setFolderPath((prev) => prev.slice(0, index + 1))
+    setSelectedFile(null)
   }
 
   // ── Delete handlers ──────────────────────────────────────────────────────────
@@ -156,12 +228,13 @@ export default function FilesExplorer() {
       setDeleteSuccess(`"${deleteConfirm.name}" deleted from Google Drive.`)
       if (selectedFile?.googleFileId === deleteConfirm.googleFileId) setSelectedFile(null)
       setFiles((prev) => prev.filter((f) => f.googleFileId !== deleteConfirm.googleFileId))
+      setDeleteConfirm(null)
       setTimeout(() => setDeleteSuccess(null), 4000)
     } catch (err) {
-      setDeleteError(err.message || 'Failed to delete file.')
+      const serverMsg = err.response?.data?.message
+      setDeleteError(serverMsg || err.message || 'Failed to delete item from Google Drive.')
     } finally {
       setDeletingFileId(null)
-      setDeleteConfirm(null)
     }
   }
 
@@ -184,15 +257,40 @@ export default function FilesExplorer() {
     setUploadError(null)
     setUploadSuccess(null)
     try {
-      const newFile = await uploadFile(file, activeAccountId)
+      // Upload into currentFolder
+      const newFile = await uploadFile(file, activeAccountId, currentFolder.googleFileId)
       setFiles((prev) => [newFile, ...prev])
-      setUploadSuccess(`"${file.name}" uploaded to Google Drive successfully!`)
+      setUploadSuccess(`"${file.name}" uploaded into ${currentFolder.name} successfully!`)
       setShowUploadModal(false)
       setTimeout(() => setUploadSuccess(null), 4000)
     } catch (err) {
       setUploadError(err.message || 'Upload failed.')
     } finally {
       setUploading(false)
+    }
+  }
+
+  // ── Create Folder handler ────────────────────────────────────────────────────
+  const handleCreateFolderSubmit = async (e) => {
+    e.preventDefault()
+    if (!newFolderName.trim()) return
+    setCreatingFolder(true)
+    setCreateFolderError(null)
+    try {
+      const newFolderObj = await createFolder(
+        newFolderName.trim(),
+        activeAccountId,
+        currentFolder.googleFileId
+      )
+      setFiles((prev) => [newFolderObj, ...prev])
+      setNewFolderName('')
+      setShowNewFolderModal(false)
+      setUploadSuccess(`Folder "${newFolderObj.name}" created successfully!`)
+      setTimeout(() => setUploadSuccess(null), 4000)
+    } catch (err) {
+      setCreateFolderError(err.message || 'Failed to create folder.')
+    } finally {
+      setCreatingFolder(false)
     }
   }
 
@@ -207,16 +305,22 @@ export default function FilesExplorer() {
                 <Trash2 size={18} className="text-red-600" />
               </div>
               <div>
-                <h3 className="text-base font-bold text-slate-900">Delete File from Google Drive?</h3>
+                <h3 className="text-base font-bold text-slate-900">
+                  Delete {deleteConfirm.mimeType === 'application/vnd.google-apps.folder' ? 'Folder' : 'File'} from Google Drive?
+                </h3>
                 <p className="text-xs text-slate-500 mt-0.5">This action cannot be undone.</p>
               </div>
             </div>
             <div className="bg-slate-50 rounded-xl px-4 py-3 mb-4 border border-slate-200">
               <p className="text-sm font-medium text-slate-800 truncate">{deleteConfirm.name}</p>
-              <p className="text-xs text-slate-500 mt-0.5">{formatBytes(deleteConfirm.sizeBytes)}</p>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {deleteConfirm.mimeType === 'application/vnd.google-apps.folder'
+                  ? 'Folder'
+                  : formatBytes(deleteConfirm.sizeBytes)}
+              </p>
             </div>
             <p className="text-xs text-slate-600 mb-5">
-              This will permanently delete the file from your Google Drive account and remove it from the local index.
+              This will permanently delete the item from your Google Drive account and remove it from the local index.
             </p>
             {deleteError && (
               <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700">{deleteError}</div>
@@ -246,6 +350,71 @@ export default function FilesExplorer() {
         </div>
       )}
 
+      {/* New Folder Modal */}
+      {showNewFolderModal && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl p-6 max-w-md w-full">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-700">
+                  <FolderPlus size={18} />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">New Folder</h3>
+                  <p className="text-xs text-slate-500">Creating in: {currentFolder.name}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowNewFolderModal(false)}
+                disabled={creatingFolder}
+                className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            {createFolderError && (
+              <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700">{createFolderError}</div>
+            )}
+
+            <form onSubmit={handleCreateFolderSubmit} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                  Folder Name
+                </label>
+                <input
+                  type="text"
+                  value={newFolderName}
+                  onChange={(e) => setNewFolderName(e.target.value)}
+                  placeholder="Untitled folder"
+                  autoFocus
+                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowNewFolderModal(false)}
+                  disabled={creatingFolder}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={creatingFolder || !newFolderName.trim()}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold shadow-sm transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  {creatingFolder && <RefreshCw size={13} className="animate-spin" />}
+                  <span>{creatingFolder ? 'Creating…' : 'Create Folder'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Upload Modal */}
       {showUploadModal && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
@@ -257,7 +426,7 @@ export default function FilesExplorer() {
                 </div>
                 <div>
                   <h3 className="text-base font-bold text-slate-900">Upload to Google Drive</h3>
-                  <p className="text-xs text-slate-500">File will be saved to your Drive root folder</p>
+                  <p className="text-xs text-slate-500">File will be saved inside: <strong className="text-slate-700">{currentFolder.name}</strong></p>
                 </div>
               </div>
               <button
@@ -301,7 +470,7 @@ export default function FilesExplorer() {
                   <Upload size={32} className="text-slate-400" />
                   <div>
                     <p className="text-sm font-semibold text-slate-700">Drop a file here or click to browse</p>
-                    <p className="text-xs text-slate-400 mt-1">Supported: any file type</p>
+                    <p className="text-xs text-slate-400 mt-1">Target folder: {currentFolder.name}</p>
                   </div>
                 </div>
               )}
@@ -318,24 +487,31 @@ export default function FilesExplorer() {
       {/* Main Files Table Area */}
       <div className="flex-1 flex flex-col min-w-0 overflow-y-auto px-6 py-6 sm:px-8">
         {/* Page Header */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
           <div>
             <div className="flex items-center gap-2">
-              <h1 className="text-xl font-bold text-slate-900 tracking-tight">Drive Explorer</h1>
+              <h1 className="text-xl font-bold text-slate-900 tracking-tight">Files Explorer</h1>
               <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200/60">
-                {files.length} indexed files
+                {filteredFiles.length} items
               </span>
             </div>
             <p className="text-xs text-slate-500 mt-1">
-              Browse, manage, and upload files for{' '}
+              Browse Google Drive hierarchy for{' '}
               <strong className="text-slate-700">{activeAccount?.email || 'Connected Drive'}</strong>
             </p>
           </div>
 
           <div className="flex items-center gap-2">
             <button
+              onClick={() => { setCreateFolderError(null); setNewFolderName(''); setShowNewFolderModal(true) }}
+              className="flex items-center gap-1.5 px-3 py-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-xl text-xs font-semibold shadow-xs transition-all"
+            >
+              <FolderPlus size={14} className="text-slate-600" />
+              <span>New Folder</span>
+            </button>
+            <button
               onClick={() => { setUploadError(null); setShowUploadModal(true) }}
-              className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold shadow-sm transition-all"
+              className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold shadow-xs transition-all"
             >
               <Upload size={13} />
               <span>Upload File</span>
@@ -343,12 +519,35 @@ export default function FilesExplorer() {
             <button
               onClick={loadData}
               disabled={loading}
-              className="flex items-center gap-1.5 px-3 py-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-xl text-xs font-medium shadow-sm transition-all"
+              className="flex items-center gap-1.5 px-3 py-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-xl text-xs font-medium shadow-xs transition-all"
             >
               <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
               <span>Refresh</span>
             </button>
           </div>
+        </div>
+
+        {/* Requirement 3: BREADCRUMB NAVIGATION */}
+        <div className="bg-white rounded-xl border border-slate-200/90 shadow-xs px-4 py-2.5 mb-4 flex items-center gap-1 overflow-x-auto text-xs font-medium">
+          <HardDrive size={15} className="text-blue-600 mr-1 shrink-0" />
+          {folderPath.map((item, index) => {
+            const isLast = index === folderPath.length - 1
+            return (
+              <div key={item.googleFileId || 'root'} className="flex items-center gap-1 shrink-0">
+                {index > 0 && <ChevronRight size={13} className="text-slate-400 shrink-0" />}
+                <button
+                  onClick={() => handleBreadcrumbClick(index)}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${
+                    isLast
+                      ? 'bg-blue-50 text-blue-700 font-bold border border-blue-200/60'
+                      : 'hover:bg-slate-100 text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  {item.name}
+                </button>
+              </div>
+            )
+          })}
         </div>
 
         {/* Success Banners */}
@@ -366,7 +565,7 @@ export default function FilesExplorer() {
         )}
 
         {/* Search & Filter Bar */}
-        <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm p-3 mb-5 flex flex-wrap items-center gap-3">
+        <div className="bg-white rounded-2xl border border-slate-200/90 shadow-xs p-3 mb-5 flex flex-wrap items-center gap-3">
           {/* Search Input */}
           <div className="relative flex-1 min-w-[220px]">
             <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -374,7 +573,7 @@ export default function FilesExplorer() {
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Filter by file name or extension…"
+              placeholder="Search by file name or format…"
               className="w-full pl-9 pr-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all"
             />
           </div>
@@ -387,7 +586,7 @@ export default function FilesExplorer() {
                 onClick={() => setSelectedCategory(cat.value)}
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all whitespace-nowrap ${
                   selectedCategory === cat.value
-                    ? 'bg-blue-600 text-white shadow-sm'
+                    ? 'bg-blue-600 text-white shadow-xs'
                     : 'text-slate-600 hover:bg-slate-100'
                 }`}
               >
@@ -420,23 +619,23 @@ export default function FilesExplorer() {
 
         {/* Files Table */}
         {loading ? (
-          <Loading message="Loading stored files and findings…" />
+          <Loading message="Loading Google Drive items and findings…" />
         ) : filteredFiles.length === 0 ? (
           <EmptyState
-            title={searchQuery ? 'No files match your search' : 'No indexed files found'}
+            title={searchQuery ? 'No items match your search' : 'This folder is empty'}
             description={
               searchQuery
                 ? 'Try adjusting your search keywords or filter category.'
-                : 'Run a Drive scan to index file metadata from your Google account, or upload a file.'
+                : 'Upload a file or create a folder inside this location.'
             }
           />
         ) : (
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex-1 flex flex-col">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden flex-1 flex flex-col">
             <div className="overflow-x-auto flex-1">
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="border-b border-slate-200 bg-slate-50/80 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
-                    <th className="py-3 px-4">File Name</th>
+                    <th className="py-3 px-4">Name</th>
                     <th className="py-3 px-4">Size</th>
                     <th className="py-3 px-4">Hygiene Status</th>
                     <th className="py-3 px-4">Last Modified</th>
@@ -445,6 +644,7 @@ export default function FilesExplorer() {
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-xs text-slate-700">
                   {filteredFiles.map((file) => {
+                    const isFolder = file.mimeType === 'application/vnd.google-apps.folder'
                     const fileFindings = getFileFindings(file.id)
                     const isSelected = selectedFile?.id === file.id
                     const isDeleting = deletingFileId === file.googleFileId
@@ -452,34 +652,45 @@ export default function FilesExplorer() {
                     return (
                       <tr
                         key={file.id}
-                        onClick={() => setSelectedFile(file)}
+                        onClick={() => {
+                          if (isFolder) {
+                            handleOpenFolder(file)
+                          } else {
+                            setSelectedFile(file)
+                          }
+                        }}
                         className={`hover:bg-slate-50/90 cursor-pointer transition-colors ${
                           isSelected ? 'bg-blue-50/60' : ''
                         } ${isDeleting ? 'opacity-50' : ''}`}
                       >
-                        {/* Name */}
+                        {/* Name Column */}
                         <td className="py-3 px-4 max-w-[280px]">
                           <div className="flex items-center gap-3">
                             <FileIcon mimeType={file.mimeType} size="sm" />
                             <div className="min-w-0">
-                              <p className="font-medium text-slate-900 truncate" title={file.name}>
+                              <p className="font-semibold text-slate-900 truncate flex items-center gap-1.5" title={file.name}>
                                 {file.name}
                               </p>
                               <p className="text-[11px] text-slate-400 truncate">
-                                {file.mimeType || 'Unknown format'}
+                                {isFolder ? 'Folder' : file.mimeType || 'File'}
                               </p>
                             </div>
                           </div>
                         </td>
 
-                        {/* Size */}
-                        <td className="py-3 px-4 font-mono font-medium text-slate-800 whitespace-nowrap">
-                          {formatBytes(file.sizeBytes)}
+                        {/* Size Column */}
+                        <td className="py-3 px-4 font-mono font-medium text-slate-600 whitespace-nowrap">
+                          {isFolder ? '—' : formatBytes(file.sizeBytes)}
                         </td>
 
-                        {/* Hygiene Status / Badges */}
+                        {/* Hygiene Status Column */}
                         <td className="py-3 px-4">
-                          {fileFindings.length === 0 ? (
+                          {isFolder ? (
+                            <span className="inline-flex items-center gap-1 text-[11px] text-slate-500 font-medium px-2 py-0.5 rounded-full bg-slate-100 border border-slate-200/60">
+                              <Folder size={11} />
+                              Folder
+                            </span>
+                          ) : fileFindings.length === 0 ? (
                             <span className="inline-flex items-center gap-1 text-[11px] text-emerald-700 font-medium px-2 py-0.5 rounded-full bg-emerald-50 border border-emerald-200/60">
                               <Sparkles size={11} />
                               Healthy
@@ -501,12 +712,12 @@ export default function FilesExplorer() {
                           )}
                         </td>
 
-                        {/* Date */}
+                        {/* Last Modified Column */}
                         <td className="py-3 px-4 text-slate-500 whitespace-nowrap">
                           {formatDate(file.modifiedTime)}
                         </td>
 
-                        {/* Actions */}
+                        {/* Actions Column */}
                         <td
                           className="py-3 px-4 text-right whitespace-nowrap"
                           onClick={(e) => e.stopPropagation()}
@@ -535,12 +746,23 @@ export default function FilesExplorer() {
                                 <Trash2 size={13} />
                               )}
                             </button>
-                            <button
-                              onClick={() => setSelectedFile(file)}
-                              className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-slate-900 transition-colors"
-                            >
-                              <ChevronRight size={13} />
-                            </button>
+                            {isFolder ? (
+                              <button
+                                onClick={() => handleOpenFolder(file)}
+                                title="Open folder"
+                                className="p-1.5 rounded-lg hover:bg-blue-50 text-slate-500 hover:text-blue-700 transition-colors"
+                              >
+                                <ChevronRight size={14} />
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => setSelectedFile(file)}
+                                title="View details"
+                                className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-slate-900 transition-colors"
+                              >
+                                <ChevronRight size={13} />
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -565,7 +787,9 @@ export default function FilesExplorer() {
                   {selectedFile.name}
                 </h3>
                 <p className="text-xs text-slate-500 font-mono">
-                  {formatBytes(selectedFile.sizeBytes)}
+                  {selectedFile.mimeType === 'application/vnd.google-apps.folder'
+                    ? 'Folder'
+                    : formatBytes(selectedFile.sizeBytes)}
                 </p>
               </div>
             </div>
@@ -586,7 +810,7 @@ export default function FilesExplorer() {
                   href={selectedFile.webViewLink}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold shadow-sm transition-colors"
+                  className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold shadow-xs transition-colors"
                 >
                   <ExternalLink size={14} />
                   <span>Open in Google Drive</span>
@@ -609,7 +833,7 @@ export default function FilesExplorer() {
               {getFileFindings(selectedFile.id).length === 0 ? (
                 <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-200/60 text-xs text-emerald-800 flex items-center gap-2">
                   <Sparkles size={14} className="text-emerald-600" />
-                  <span>No hygiene issues detected for this file.</span>
+                  <span>No hygiene issues detected for this item.</span>
                 </div>
               ) : (
                 <div className="space-y-2">
@@ -637,7 +861,7 @@ export default function FilesExplorer() {
             {/* File Metadata */}
             <div>
               <p className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3">
-                File Details
+                Item Details
               </p>
               <div className="space-y-2.5 text-xs">
                 <div className="flex justify-between py-1.5 border-b border-slate-100">
@@ -653,9 +877,15 @@ export default function FilesExplorer() {
                   </span>
                 </div>
                 <div className="flex justify-between py-1.5 border-b border-slate-100">
+                  <span className="text-slate-500">Parent Folder ID</span>
+                  <span className="text-slate-800 font-mono text-[11px] truncate max-w-[180px]">
+                    {selectedFile.parentId || 'root'}
+                  </span>
+                </div>
+                <div className="flex justify-between py-1.5 border-b border-slate-100">
                   <span className="text-slate-500">MD5 Checksum</span>
                   <span className="text-slate-800 font-mono text-[11px] truncate max-w-[180px]">
-                    {selectedFile.md5Checksum || 'N/A (Google Doc)'}
+                    {selectedFile.md5Checksum || 'N/A'}
                   </span>
                 </div>
                 <div className="flex justify-between py-1.5 border-b border-slate-100">

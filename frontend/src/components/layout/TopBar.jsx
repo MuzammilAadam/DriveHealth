@@ -12,6 +12,10 @@ import {
 import { useAuth } from '../../context/AuthContext'
 import { formatBytes } from '../../services/driveHealthApi'
 
+// Replaceable Google Drive logo asset URL / path
+// User can replace this string with their local image path or URL (e.g. '/google-drive-logo.png')
+const GOOGLE_DRIVE_LOGO_URL = 'https://uxwing.com/wp-content/themes/uxwing/download/brands-and-social-media/google-drive-color-icon.svg'
+
 export default function TopBar() {
   const { user, activeAccount, logout } = useAuth()
   const navigate = useNavigate()
@@ -44,11 +48,22 @@ export default function TopBar() {
         onClick={() => navigate('/')}
         className="flex items-center gap-2.5 w-60 shrink-0 cursor-pointer select-none"
       >
-        <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
-          <path d="M16 4L28 24H4L16 4Z" fill="#0F9D58" opacity="0.85" />
-          <path d="M4 24L10 14H28L22 24H4Z" fill="#4285F4" opacity="0.85" />
-          <path d="M10 14L16 4L22 14H10Z" fill="#FBBC04" opacity="0.9" />
-        </svg>
+        <img
+          src={GOOGLE_DRIVE_LOGO_URL}
+          alt="Google Drive Logo"
+          onError={(e) => {
+            // Fallback placeholder if image file is not yet uploaded by user
+            e.target.onerror = null
+            e.target.style.display = 'none'
+            if (e.target.nextSibling) {
+              e.target.nextSibling.style.display = 'flex'
+            }
+          }}
+          className="w-8 h-8 object-contain shrink-0"
+        />
+        <div className="w-8 h-8 rounded-lg bg-blue-50 border border-blue-200 hidden items-center justify-center text-blue-600 font-bold text-xs shrink-0">
+          Drive
+        </div>
         <span className="text-lg font-medium text-[#202124] tracking-tight hover:text-[#1a73e8] transition-colors">
           Drive Health
         </span>

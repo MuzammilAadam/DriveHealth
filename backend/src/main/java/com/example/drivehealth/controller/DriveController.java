@@ -128,15 +128,29 @@ public class DriveController {
 
     /**
      * Uploads a file to Google Drive and indexes it locally.
-     * POST /api/drive/files/upload?accountId=1
+     * POST /api/drive/files/upload?accountId=1&parentId=xxx
      */
     @PostMapping("/files/upload")
     public ResponseEntity<DriveFileResponse> uploadFile(
             @RequestParam(name = "accountId", required = false) Long accountId,
+            @RequestParam(name = "parentId", required = false) String parentId,
             @RequestParam("file") MultipartFile file) throws IOException {
         String originalFilename = file.getOriginalFilename() != null ? file.getOriginalFilename() : "upload";
         String mimeType = file.getContentType() != null ? file.getContentType() : "application/octet-stream";
-        DriveFileResponse response = googleDriveService.uploadFile(accountId, originalFilename, mimeType, file.getBytes());
+        DriveFileResponse response = googleDriveService.uploadFile(accountId, originalFilename, mimeType, file.getBytes(), parentId);
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Creates a new folder in Google Drive and indexes it locally.
+     * POST /api/drive/folders?accountId=1&parentId=xxx&name=FolderName
+     */
+    @PostMapping("/folders")
+    public ResponseEntity<DriveFileResponse> createFolder(
+            @RequestParam(name = "accountId", required = false) Long accountId,
+            @RequestParam(name = "parentId", required = false) String parentId,
+            @RequestParam("name") String name) {
+        DriveFileResponse response = googleDriveService.createFolder(accountId, name, parentId);
         return ResponseEntity.ok(response);
     }
 }

@@ -1,3 +1,5 @@
+import { Folder } from 'lucide-react'
+
 // Maps MIME types to Google Drive-style colored file icons
 const ICON_MAP = {
   'application/pdf': { color: '#EA4335', label: 'PDF', bg: '#fce8e6' },
@@ -5,7 +7,7 @@ const ICON_MAP = {
   'application/vnd.google-apps.spreadsheet': { color: '#0F9D58', label: 'Sheet', bg: '#e6f4ea' },
   'application/vnd.google-apps.presentation': { color: '#F4B400', label: 'Slides', bg: '#fef9e7' },
   'application/vnd.google-apps.form': { color: '#7986CB', label: 'Form', bg: '#ede7f6' },
-  'application/vnd.google-apps.folder': { color: '#5F6368', label: 'Folder', bg: '#f1f3f4' },
+  'application/vnd.google-apps.folder': { color: '#5F6368', label: 'Folder', bg: '#f1f3f4', isFolder: true },
   'image/jpeg': { color: '#EA4335', label: 'JPG', bg: '#fce8e6' },
   'image/png': { color: '#EA4335', label: 'PNG', bg: '#fce8e6' },
   'image/gif': { color: '#EA4335', label: 'GIF', bg: '#fce8e6' },
@@ -57,15 +59,27 @@ export function mimeToLabel(mimeType) {
 }
 
 export default function FileIcon({ mimeType, size = 'md' }) {
-  const { color, label, bg } = getIconConfig(mimeType)
+  const config = getIconConfig(mimeType)
+  const isFolder = mimeType === 'application/vnd.google-apps.folder' || config.isFolder
   const dim = size === 'sm' ? 'w-7 h-7 text-[9px]' : 'w-9 h-9 text-[10px]'
+  const iconSize = size === 'sm' ? 16 : 20
+
+  if (isFolder) {
+    return (
+      <div
+        className={`${dim} rounded-lg flex items-center justify-center shrink-0 select-none bg-slate-100 text-slate-600 shadow-xs border border-slate-200/80`}
+      >
+        <Folder size={iconSize} className="text-slate-600 fill-slate-300" />
+      </div>
+    )
+  }
 
   return (
     <div
-      className={`${dim} rounded flex items-center justify-center font-bold shrink-0 select-none`}
-      style={{ backgroundColor: bg, color }}
+      className={`${dim} rounded-lg flex items-center justify-center font-bold shrink-0 select-none`}
+      style={{ backgroundColor: config.bg, color: config.color }}
     >
-      {label}
+      {config.label}
     </div>
   )
 }

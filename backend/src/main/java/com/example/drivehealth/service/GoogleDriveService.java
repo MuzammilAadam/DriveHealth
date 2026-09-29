@@ -18,7 +18,9 @@ import com.example.drivehealth.entity.Permission;
 import com.example.drivehealth.entity.ScanRun;
 import com.example.drivehealth.exception.OAuthException;
 import com.example.drivehealth.exception.ResourceNotFoundException;
+import com.example.drivehealth.repository.AnalysisFindingRepository;
 import com.example.drivehealth.repository.DriveFileRepository;
+import com.example.drivehealth.repository.DuplicateGroupFileRepository;
 import com.example.drivehealth.repository.GoogleAccountRepository;
 import com.example.drivehealth.repository.PermissionRepository;
 import org.slf4j.Logger;
@@ -71,6 +73,8 @@ public class GoogleDriveService {
     private final GoogleOAuthService googleOAuthService;
     private final RestTemplate restTemplate;
     private final PermissionRepository permissionRepository;
+    private final AnalysisFindingRepository analysisFindingRepository;
+    private final DuplicateGroupFileRepository duplicateGroupFileRepository;
     private final ScanRunService scanRunService;
     private final StorageSnapshotService storageSnapshotService;
     private final DuplicateDetectionService duplicateDetectionService;
@@ -83,6 +87,8 @@ public class GoogleDriveService {
                               GoogleOAuthService googleOAuthService,
                               RestTemplate restTemplate,
                               PermissionRepository permissionRepository,
+                              AnalysisFindingRepository analysisFindingRepository,
+                              DuplicateGroupFileRepository duplicateGroupFileRepository,
                               ScanRunService scanRunService,
                               StorageSnapshotService storageSnapshotService,
                               @Lazy DuplicateDetectionService duplicateDetectionService,
@@ -94,6 +100,8 @@ public class GoogleDriveService {
         this.googleOAuthService = googleOAuthService;
         this.restTemplate = restTemplate;
         this.permissionRepository = permissionRepository;
+        this.analysisFindingRepository = analysisFindingRepository;
+        this.duplicateGroupFileRepository = duplicateGroupFileRepository;
         this.scanRunService = scanRunService;
         this.storageSnapshotService = storageSnapshotService;
         this.duplicateDetectionService = duplicateDetectionService;
@@ -604,6 +612,17 @@ public class GoogleDriveService {
         GoogleAccount account = getAccount(googleAccountId);
         List<DriveFile> files = driveFileRepository.findByGoogleAccount_Id(account.getId());
 
+        // If new account has never been scanned, trigger initial scan automatically
+        if (files.isEmpty() && account.getLastSyncedAt() == null) {
+            log.info("First time fetching files for account {}. Automatically starting initial Google Drive scan...", account.getEmail());
+            try {
+                scanAndSyncFiles(account.getId());
+                files = driveFileRepository.findByGoogleAccount_Id(account.getId());
+            } catch (Exception ex) {
+                log.warn("Automatic initial scan failed for account {}: {}", account.getEmail(), ex.getMessage());
+            }
+        }
+
         List<DriveFileResponse> responses = new ArrayList<>();
         for (DriveFile file : files) {
             responses.add(mapToDriveFileResponse(file));
@@ -767,7 +786,25 @@ public class GoogleDriveService {
             return new OAuthException(message, ex);
         }
 
-        log.error("Failed to fetch files from Google Drive for account {}: {}", account.getEmail(), ex.getMessage());
+        if (responseBody != null && responseBody.contains("\"message\"")) {
+            try {
+                int msgIndex = responseBody.indexOf("\"message\"");
+                int colonIndex = responseBody.indexOf(":", msgIndex);
+                int quoteStart = responseBody.indexOf("\"", colonIndex);
+                int quoteEnd = responseBody.indexOf("\"", quoteStart + 1);
+                if (quoteStart != -1 && quoteEnd != -1) {
+                    String extractedMessage = responseBody.substring(quoteStart + 1, quoteEnd);
+                    if (!extractedMessage.isBlank()) {
+                        log.error("Google Drive API error for account {}: {}", account.getEmail(), extractedMessage);
+                        return new OAuthException("Google Drive error: " + extractedMessage, ex);
+                    }
+                }
+            } catch (Exception e) {
+                // Ignore parsing failure
+            }
+        }
+
+        log.error("Failed Google Drive request for account {}: {}", account.getEmail(), ex.getMessage());
         return new OAuthException("Error communicating with Google Drive API: " + ex.getMessage(), ex);
     }
 
@@ -779,8 +816,8 @@ public class GoogleDriveService {
         GoogleAccount account = getAccount(googleAccountId);
         String accessToken = googleOAuthService.getValidAccessToken(account);
 
-        // Call Google Drive DELETE /files/{fileId}
-        String deleteUrl = DRIVE_FILES_API_URL + "/" + googleFileId;
+        // Call Google Drive DELETE /files/{fileId}?supportsAllDrives=true
+        String deleteUrl = DRIVE_FILES_API_URL + "/" + googleFileId + "?supportsAllDrives=true";
         HttpHeaders headers = new HttpHeaders();
         headers.setBearerAuth(accessToken);
         HttpEntity<Void> request = new HttpEntity<>(headers);
@@ -798,11 +835,15 @@ public class GoogleDriveService {
             throw translateGoogleDriveException(ex, account);
         }
 
-        // Remove from local DB
+        // Remove from local DB with clean CASCADE cleanup
         driveFileRepository.findByGoogleAccount_IdAndGoogleFileId(account.getId(), googleFileId)
                 .ifPresent(f -> {
                     permissionRepository.deleteByDriveFileId(f.getId());
+                    analysisFindingRepository.deleteByDriveFileId(f.getId());
+                    duplicateGroupFileRepository.deleteByDriveFileId(f.getId());
                     permissionRepository.flush();
+                    analysisFindingRepository.flush();
+                    duplicateGroupFileRepository.flush();
                     driveFileRepository.delete(f);
                 });
         log.info("Removed file {} from local DB for account {}", googleFileId, account.getEmail());
@@ -812,7 +853,7 @@ public class GoogleDriveService {
      * Uploads a file to Google Drive (multipart upload), then indexes it in local DB.
      */
     @Transactional
-    public DriveFileResponse uploadFile(Long googleAccountId, String filename, String mimeType, byte[] content) {
+    public DriveFileResponse uploadFile(Long googleAccountId, String filename, String mimeType, byte[] content, String parentId) {
         GoogleAccount account = getAccount(googleAccountId);
         String accessToken = googleOAuthService.getValidAccessToken(account);
 
@@ -821,7 +862,12 @@ public class GoogleDriveService {
 
         // Build multipart body manually
         String boundary = "-------314159265358979323846";
-        String metadataJson = "{\"name\":\"" + filename.replace("\"", "\\\"") + "\"}";
+        String metadataJson;
+        if (parentId != null && !parentId.trim().isEmpty()) {
+            metadataJson = "{\"name\":\"" + filename.replace("\"", "\\\"") + "\",\"parents\":[\"" + parentId.replace("\"", "\\\"") + "\"]}";
+        } else {
+            metadataJson = "{\"name\":\"" + filename.replace("\"", "\\\"") + "\"}";
+        }
 
         org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
         headers.setBearerAuth(accessToken);
@@ -863,7 +909,7 @@ public class GoogleDriveService {
             newFile.setSize(dto.getSize() != null ? dto.getSize() : (long) content.length);
             newFile.setCreatedTime(dto.getCreatedTime());
             newFile.setModifiedTime(dto.getModifiedTime());
-            newFile.setParentId(dto.getParentId());
+            newFile.setParentId(dto.getParentId() != null ? dto.getParentId() : parentId);
             newFile.setWebUrl(dto.getWebUrl());
             newFile.setMd5Checksum(dto.getMd5Checksum());
             newFile.setTrashed(false);
@@ -872,6 +918,68 @@ public class GoogleDriveService {
             DriveFile saved = driveFileRepository.save(newFile);
 
             log.info("Uploaded and indexed file '{}' (id={}) for account {}", filename, item.getId(), account.getEmail());
+            return mapToDriveFileResponse(saved);
+        } catch (Exception ex) {
+            throw translateGoogleDriveException(ex, account);
+        }
+    }
+
+    public DriveFileResponse uploadFile(Long googleAccountId, String filename, String mimeType, byte[] content) {
+        return uploadFile(googleAccountId, filename, mimeType, content, null);
+    }
+
+    /**
+     * Creates a new folder in Google Drive and indexes it locally.
+     */
+    @Transactional
+    public DriveFileResponse createFolder(Long googleAccountId, String folderName, String parentId) {
+        GoogleAccount account = getAccount(googleAccountId);
+        String accessToken = googleOAuthService.getValidAccessToken(account);
+
+        String createUrl = "https://www.googleapis.com/drive/v3/files?fields=id,name,mimeType,size,createdTime,modifiedTime,parents,webViewLink,md5Checksum,trashed,owners";
+
+        org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
+        headers.setBearerAuth(accessToken);
+        headers.setContentType(org.springframework.http.MediaType.APPLICATION_JSON);
+
+        Map<String, Object> bodyMap = new HashMap<>();
+        bodyMap.put("name", folderName);
+        bodyMap.put("mimeType", "application/vnd.google-apps.folder");
+        if (parentId != null && !parentId.trim().isEmpty()) {
+            bodyMap.put("parents", List.of(parentId));
+        }
+
+        HttpEntity<Map<String, Object>> request = new HttpEntity<>(bodyMap, headers);
+
+        try {
+            ResponseEntity<GoogleDriveFileItem> response = restTemplate.postForEntity(
+                    createUrl,
+                    request,
+                    GoogleDriveFileItem.class
+            );
+
+            GoogleDriveFileItem item = response.getBody();
+            if (item == null || item.getId() == null) {
+                throw new OAuthException("Folder creation in Google Drive returned empty response");
+            }
+
+            DriveFileDto dto = mapToDriveFileDto(item);
+            DriveFile newFile = new DriveFile();
+            newFile.setGoogleAccount(account);
+            newFile.setGoogleFileId(dto.getId());
+            newFile.setName(dto.getName());
+            newFile.setMimeType("application/vnd.google-apps.folder");
+            newFile.setSize(0L);
+            newFile.setCreatedTime(dto.getCreatedTime() != null ? dto.getCreatedTime() : LocalDateTime.now());
+            newFile.setModifiedTime(dto.getModifiedTime() != null ? dto.getModifiedTime() : LocalDateTime.now());
+            newFile.setParentId(dto.getParentId() != null ? dto.getParentId() : parentId);
+            newFile.setWebUrl(dto.getWebUrl());
+            newFile.setTrashed(false);
+            newFile.setOwnerEmail(dto.getOwnerEmail());
+            newFile.setIndexedAt(LocalDateTime.now());
+            DriveFile saved = driveFileRepository.save(newFile);
+
+            log.info("Created folder '{}' (id={}) for account {}", folderName, item.getId(), account.getEmail());
             return mapToDriveFileResponse(saved);
         } catch (Exception ex) {
             throw translateGoogleDriveException(ex, account);

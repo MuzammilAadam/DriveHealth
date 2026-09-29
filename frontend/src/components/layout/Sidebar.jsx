@@ -11,6 +11,7 @@ import {
   Plus,
   RefreshCw,
   ExternalLink,
+  HelpCircle,
 } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
 import { getStorageQuota, formatBytes } from '../../services/driveHealthApi'
@@ -23,6 +24,7 @@ const NAV_ITEMS = [
   { to: '/reports', label: 'Reports', icon: BarChart2 },
   { to: '/settings', label: 'Settings', icon: Settings },
   { to: '/profile', label: 'Profile', icon: User },
+  { to: '/docs', label: 'Help & Docs', icon: HelpCircle },
 ]
 
 export default function Sidebar() {

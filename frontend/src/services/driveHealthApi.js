@@ -29,15 +29,20 @@ export const getStoredFiles = (accountId) =>
 export const deleteFile = (googleFileId, accountId) =>
   api.delete(`/drive/files/${googleFileId}`, { params: withAccountId({}, accountId) }).then((r) => r.data)
 
-export const uploadFile = (file, accountId) => {
+export const uploadFile = (file, accountId, parentId = null) => {
   const formData = new FormData()
   formData.append('file', file)
-  const params = withAccountId({}, accountId)
+  const params = withAccountId({ ...(parentId ? { parentId } : {}) }, accountId)
   const queryString = new URLSearchParams(params).toString()
   return api.post(`/drive/files/upload${queryString ? `?${queryString}` : ''}`, formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
     timeout: 300000, // 5 minute timeout for uploads
   }).then((r) => r.data)
+}
+
+export const createFolder = (name, accountId, parentId = null) => {
+  const params = withAccountId({ name, ...(parentId ? { parentId } : {}) }, accountId)
+  return api.post('/drive/folders', null, { params }).then((r) => r.data)
 }
 
 export const getStorageQuota = (accountId) =>

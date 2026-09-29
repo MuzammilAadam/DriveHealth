@@ -9,6 +9,7 @@ import Settings from './pages/Settings'
 import Profile from './pages/Profile'
 import FilesExplorer from './pages/FilesExplorer'
 import FindingsHub from './pages/FindingsHub'
+import HelpDocs from './pages/HelpDocs'
 
 export default function App() {
   return (
@@ -24,6 +25,7 @@ export default function App() {
           <Route path="reports" element={<Reports />} />
           <Route path="settings" element={<Settings />} />
           <Route path="profile" element={<Profile />} />
+          <Route path="docs" element={<HelpDocs />} />
         </Route>
       </Routes>
     </BrowserRouter>
